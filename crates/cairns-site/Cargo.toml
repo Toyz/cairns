@@ -1,0 +1,17 @@
+[package]
+name = "cairns-site"
+description = "Renders a cairns worklog into a static site, from log.json."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+cairns-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

@@ -1,0 +1,155 @@
+/* One stylesheet, embedded in the binary. A worklog is prose with evidence in
+   it, so the type is sized for reading and everything else gets out of the way. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fdfdfc;
+  --fg: #1a1a18;
+  --muted: #6b6b66;
+  --rule: #e2e1dc;
+  --link: #1a4fa0;
+  --chip-bg: #f0efea;
+  --code-bg: #f4f3ee;
+  --mark: #fff3bf;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a;
+    --fg: #e4e4e0;
+    --muted: #9a9a93;
+    --rule: #2c2c31;
+    --link: #8ab4f8;
+    --chip-bg: #24242a;
+    --code-bg: #1e1e23;
+    --mark: #4a4022;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
+
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+/* Header ------------------------------------------------------------------ */
+
+.masthead { border-bottom: 1px solid var(--rule); padding-bottom: 1.25rem; margin-bottom: 2rem; }
+.masthead h1 { font-size: 1.5rem; margin: 0 0 .35rem; letter-spacing: -.01em; }
+.masthead h1 a { color: inherit; text-decoration: none; }
+.masthead p { margin: 0; color: var(--muted); font-size: .95rem; }
+.masthead nav { margin-top: .9rem; display: flex; gap: 1rem; font-size: .9rem; }
+
+/* Controls ---------------------------------------------------------------- */
+
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1.5rem; }
+
+input[type="search"] {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: .5rem .7rem;
+  font: inherit;
+  font-size: .95rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: .4rem;
+}
+input[type="search"]:focus { outline: 2px solid var(--link); outline-offset: -1px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: 1.75rem; }
+
+.chip {
+  font: inherit;
+  font-size: .8rem;
+  padding: .2rem .55rem;
+  border: 1px solid var(--rule);
+  border-radius: 1rem;
+  background: var(--chip-bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--link); border-color: var(--link); color: #fff; }
+.chip .count { opacity: .65; margin-left: .3rem; }
+
+/* Entry list -------------------------------------------------------------- */
+
+.entries { list-style: none; margin: 0; padding: 0; }
+.entries li { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
+.entries .no { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; margin-right: .5rem; }
+.entries h2 { font-size: 1.02rem; font-weight: 600; margin: 0 0 .25rem; line-height: 1.4; }
+.entries h2 a { color: inherit; text-decoration: none; }
+.entries h2 a:hover { text-decoration: underline; }
+.entries p { margin: 0; color: var(--muted); font-size: .92rem; }
+.entries .meta { margin-top: .3rem; font-size: .8rem; color: var(--muted); }
+.empty { color: var(--muted); padding: 2rem 0; }
+
+/* One entry --------------------------------------------------------------- */
+
+article h1 { font-size: 1.6rem; line-height: 1.25; letter-spacing: -.01em; margin: 0 0 .5rem; }
+article h2 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
+article p, article li { overflow-wrap: break-word; }
+article img { max-width: 100%; }
+
+.dateline { color: var(--muted); font-size: .85rem; margin-bottom: 2rem; }
+.dateline .chip { cursor: default; }
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: .4rem;
+  padding: .8rem 1rem;
+  overflow-x: auto;
+  font-size: .85rem;
+  line-height: 1.5;
+}
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+p code, li code, td code { background: var(--code-bg); padding: .1em .35em; border-radius: .25rem; }
+pre code { background: none; padding: 0; }
+
+blockquote { margin: 1.2rem 0; padding-left: 1rem; border-left: 3px solid var(--rule); color: var(--muted); }
+
+table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: 1.2rem 0; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: .4rem .7rem; border-bottom: 1px solid var(--rule); }
+th { font-weight: 600; }
+
+/* The correction notice, which is the reason supersedes exists -------------- */
+
+.notice {
+  background: var(--chip-bg);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--link);
+  border-radius: .3rem;
+  padding: .7rem .9rem;
+  margin: 0 0 1.75rem;
+  font-size: .92rem;
+}
+.notice p { margin: 0; }
+.notice p + p { margin-top: .35rem; }
+
+.unknown { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); font-size: .95rem; }
+.unknown strong { display: block; color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; }
+
+nav.pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); font-size: .9rem; }
+nav.pager a { max-width: 48%; }
+nav.pager .next { margin-left: auto; text-align: right; }
+
+/* Open questions ---------------------------------------------------------- */
+
+.questions { list-style: none; margin: 0; padding: 0; }
+.questions li { padding: .85rem 0; border-bottom: 1px solid var(--rule); display: flex; gap: .85rem; }
+.questions .no { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; padding-top: .1rem; white-space: nowrap; }
+
+footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .82rem; }
+footer a { color: var(--muted); }
+
+mark { background: var(--mark); color: inherit; }

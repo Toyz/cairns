@@ -1,0 +1,39 @@
+spec_version = 1
+
+[project]
+name        = "cairns"
+slug        = "cairns"
+description = "A worklog kept as numbered markdown entries: write them, check them, publish them."
+
+[site]
+base_url = "https://toyz.github.io/cairns/"
+
+[[area]]
+name  = "spec"
+about = "the format itself - entries, config, log.json, publishing"
+[[area]]
+name  = "core"
+about = "cairns-core: parsing, validation, the canonical document"
+[[area]]
+name  = "site"
+about = "the renderer and the static site it emits"
+[[area]]
+name  = "cli"
+about = "the cairns command and its surface"
+[[area]]
+name  = "publish"
+about = "publish targets and the delivery payload"
+[[area]]
+name  = "skill"
+about = "the Claude skill shipped with the tool"
+[[area]]
+name  = "adoption"
+about = "migrating an existing worklog onto cairns"
+[[area]]
+name  = "build"
+about = "workspace layout, CI, releases"
+
+[[publish]]
+name = "site"
+type = "dir"
+path = "site/"

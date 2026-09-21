@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/cairns-core", "crates/cairns-site", "crates/cairns"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Let-chains, which config.rs uses.
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/Toyz/cairns"
+authors = ["Toyz"]
+keywords = ["worklog", "changelog", "documentation", "markdown", "static-site"]
+categories = ["command-line-utilities", "development-tools"]
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+[workspace.dependencies]
+cairns-core = { path = "crates/cairns-core", version = "0.1.0" }
+cairns-site = { path = "crates/cairns-site", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
