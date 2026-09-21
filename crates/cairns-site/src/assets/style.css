@@ -514,6 +514,25 @@ article > *:last-child { margin-bottom: 0; }
 .dateline .chip { text-decoration: none; }
 .dateline .chip:hover { border-color: var(--ink-faint); color: var(--ink); }
 
+.files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.75rem;
+  margin: calc(var(--space-4) * -1 + var(--space-2)) 0 var(--space-4);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+}
+.files-label {
+  color: var(--ink-faint);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.files a { color: var(--ink-soft); text-decoration: none; }
+.files a:hover { color: var(--accent); }
+.files code { font-size: 0.95em; }
+
 pre {
   background: var(--code-bg);
   border: 1px solid var(--rule-faint);

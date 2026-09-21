@@ -620,6 +620,22 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         rel: "../",
         base: None,
     };
+
+    // `files` has been parsed, validated and exported since the first version
+    // and shown nowhere. It is the entry's link to the code it is about.
+    if !this.files.is_empty() {
+        body.push_str("<p class=\"files\"><span class=\"files-label\">Files</span>");
+        for file in &this.files {
+            let _ = write!(
+                body,
+                "<a href=\"{}\"><code>{}</code></a>",
+                escape(&links.resolve(&format!("../{file}"))),
+                escape(file)
+            );
+        }
+        body.push_str("</p>\n");
+    }
+
     let (headings, prose_html) = markdown_with_headings(prose(this), &links);
     body.push_str(&prose_html);
 
