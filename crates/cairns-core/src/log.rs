@@ -22,6 +22,11 @@ pub struct Log {
     pub areas: Vec<AreaCount>,
     pub entries: Vec<LogEntry>,
     pub open_questions: Vec<OpenQuestion>,
+    /// The project's README, as markdown, when it has one. Held here rather
+    /// than read by the renderer so that `log.json` stays the only thing the
+    /// site is built from - and so an ingest gets it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +35,8 @@ pub struct ProjectInfo {
     pub slug: String,
     pub description: String,
     pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,10 +166,12 @@ impl Log {
                 slug: config.project.slug.clone(),
                 description: config.project.description.clone(),
                 base_url: config.site.base_url.clone(),
+                repository: config.project.repository.clone(),
             },
             areas,
             entries: built,
             open_questions,
+            readme: None,
         }
     }
 }

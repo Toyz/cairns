@@ -27,6 +27,10 @@ pub struct Project {
     pub slug: String,
     #[serde(default)]
     pub description: String,
+    /// The repository, if there is one. A README's relative links point at
+    /// files in it, and on a site they have to point somewhere real.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +49,10 @@ pub struct Site {
     pub base_url: String,
     #[serde(default)]
     pub theme: Option<String>,
+    /// A markdown file shown on the site, so a reader arriving at a worklog
+    /// can find out what the project is. Usually `README.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
 }
 
 /// The generated index. Only its opening prose is a project's to write; the

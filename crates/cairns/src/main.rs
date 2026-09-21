@@ -6,6 +6,7 @@
 //! being honest about what is not built yet.
 
 mod mcp;
+mod serve;
 
 use cairns_core::config::TargetKind;
 use cairns_core::{Config, Entry, FsSource, Log, Source, log};
@@ -54,6 +55,14 @@ enum Command {
         /// Omit the timestamp, so two runs over unchanged entries are identical.
         #[arg(long)]
         reproducible: bool,
+    },
+    /// Build the site and serve it locally, rebuilding as entries change.
+    Serve {
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+        /// Open it in a browser.
+        #[arg(long)]
+        open: bool,
     },
     /// Deliver the payload to a configured target.
     Publish {
@@ -141,7 +150,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
         Command::Open => {
             let (root, config) = load()?;
-            let built = Log::build(&config, read_entries(&root, &config)?, None);
+            let built = build_log(&root, &config, None)?;
             if built.open_questions.is_empty() {
                 println!("nothing open");
             }
@@ -152,7 +161,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
         Command::Export { out, reproducible } => {
             let (root, config) = load()?;
-            let built = Log::build(&config, read_entries(&root, &config)?, stamp(reproducible));
+            let built = build_log(&root, &config, stamp(reproducible))?;
             let json = serde_json::to_string_pretty(&built)?;
             match out {
                 Some(path) => std::fs::write(path, json)?,
@@ -162,7 +171,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
         Command::Build { out } => {
             let (root, config) = load()?;
-            let built = Log::build(&config, read_entries(&root, &config)?, stamp(false));
+            let built = build_log(&root, &config, stamp(false))?;
             let rendered = cairns_site::render(&built)?;
             for file in &rendered.files {
                 let path = out.join(&file.path);
@@ -281,10 +290,15 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("{count} entries -> {}", config.paths.index);
         }
 
+        Command::Serve { port, open } => {
+            let (root, config) = load()?;
+            serve::serve(root, config, port, open)?;
+        }
+
         Command::Publish { target, dry_run } => {
             let (root, config) = load()?;
             let target = pick_target(&config, target.as_deref())?;
-            let built = Log::build(&config, read_entries(&root, &config)?, stamp(false));
+            let built = build_log(&root, &config, stamp(false))?;
             let rendered = cairns_site::render(&built)?;
 
             match target.kind {
@@ -463,6 +477,27 @@ fn load() -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
             return Err("no cairns.toml here or above - run `cairns init`".into());
         }
     }
+}
+
+/// Build the canonical document, README and all.
+///
+/// The readme is read here rather than in core, which owns no filesystem, and
+/// lands in `log.json` so the renderer still consumes one thing.
+fn build_log(
+    root: &Path,
+    config: &Config,
+    generated: Option<String>,
+) -> Result<Log, Box<dyn std::error::Error>> {
+    let mut built = Log::build(config, read_entries(root, config)?, generated);
+    if let Some(path) = &config.site.readme {
+        match std::fs::read_to_string(root.join(path)) {
+            Ok(text) => built.readme = Some(text),
+            // Named but missing is worth saying out loud; the site is still
+            // worth building without it.
+            Err(problem) => eprintln!("cairns: {path}: {problem}"),
+        }
+    }
+    Ok(built)
 }
 
 fn read_entries(root: &Path, config: &Config) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {

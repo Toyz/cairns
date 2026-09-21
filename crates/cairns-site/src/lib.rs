@@ -55,6 +55,9 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     rendered.push("search.js", include_str!("assets/search.js"));
     rendered.push("index.html", html::home(log));
     rendered.push("open/index.html", html::open_questions(log));
+    if log.readme.is_some() {
+        rendered.push("about/index.html", html::about(log));
+    }
     rendered.push("feed.xml", feed::atom(log));
 
     let by_number = log

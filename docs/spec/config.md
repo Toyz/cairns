@@ -17,6 +17,7 @@ spec_version = 1
 name        = "Hellbender"
 slug        = "hellbender"
 description = "Reverse engineering Hellbender (Microsoft / Terminal Reality, 1996) and porting it to Rust."
+repository  = "https://github.com/Toyz/hellbender"
 
 [paths]
 entries = "worklog"
@@ -25,6 +26,7 @@ index   = "WORKLOG.md"
 [site]
 base_url = "https://toyz.github.io/hellbender/"
 theme    = "default"
+readme   = "README.md"
 
 [[area]]
 name  = "format"
@@ -66,6 +68,12 @@ written file-relative, so one build serves correctly from a GitHub Pages
 sub-path and from a domain root without re-rendering.
 
 `theme` names a built-in theme, or a path to one.
+
+`readme` names a markdown file rendered as the site's About page. A worklog
+without one tells a visitor what was found out but never what the project *is*.
+Its relative links are rewritten to point into `project.repository`, since a
+link to `docs/spec/entry.md` means a file in the repo and there is no such page
+on the site. Without a `repository` they are left alone, and will not resolve.
 
 ## `[[area]]`
 

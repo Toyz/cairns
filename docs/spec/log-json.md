@@ -61,7 +61,9 @@ whichever output nobody was looking at.
 
   "open_questions": [
     { "entry": 50, "text": "the span loop that would prove it has not been found yet" }
-  ]
+  ],
+
+  "readme": "# Hellbender\n\nReverse engineering ..."
 }
 ```
 
@@ -90,6 +92,11 @@ exactly as on disk, front matter included. Verifiable with `shasum -a 256`
 against the file, with no knowledge of this format at all. It is what lets a
 publish send only what changed, and what lets any future ingest dedupe without
 diffing prose.
+
+**`readme`** is the project's README as markdown, when `site.readme` names one.
+It is carried in the document rather than read by the renderer, so the site is
+still built from this file alone - and so anything ingesting a log gets the
+project's own description of itself along with its entries.
 
 **`extra`** holds any front matter key the spec does not define, passed through
 untouched, so a project can carry its own metadata without forking the format

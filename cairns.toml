@@ -4,9 +4,11 @@ spec_version = 1
 name        = "cairns"
 slug        = "cairns"
 description = "A worklog kept as numbered markdown entries: write them, check them, publish them."
+repository  = "https://github.com/Toyz/cairns"
 
 [site]
 base_url = "https://toyz.github.io/cairns/"
+readme   = "README.md"
 
 [[area]]
 name  = "spec"

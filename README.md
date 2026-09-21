@@ -43,6 +43,7 @@ prose lines identical on both sides, and renders in 95 ms.
 | `cairns open` | what the log still does not know, across every entry |
 | `cairns export` | the whole log as `log.json` |
 | `cairns build` | render the site, feed, search index and `log.json` |
+| `cairns serve` | the site on localhost, rebuilt as entries change |
 | `cairns publish` | deliver the payload to a configured target |
 | `cairns migrate` | convert a single-file worklog into numbered entries |
 
@@ -70,6 +71,7 @@ cairns init                                   # config, skill, index
 $EDITOR cairns.toml                           # the areas are yours to choose
 cairns new "What you found out" --area design
 cairns check
+cairns serve --open                           # look at it
 ```
 
 `init` in a repo that already keeps a worklog is safe: it freezes the slug of
@@ -139,6 +141,18 @@ arriving from a search is told the claim was revisited before they read it.
 
 Every page carries its own metadata, so a link to one entry unfurls with its
 title and summary rather than the repo's name.
+
+Point `[site] readme` at a markdown file and it becomes an About page, so a
+reader arriving at a worklog can find out what the project is. Its relative
+links are rewritten into `[project] repository`, because `docs/spec/entry.md`
+means a file in the repo, not a page on the site.
+
+```toml
+[project]
+repository = "https://github.com/Toyz/cairns"
+[site]
+readme = "README.md"
+```
 
 ## Publishing
 

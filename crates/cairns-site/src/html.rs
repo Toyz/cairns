@@ -6,7 +6,7 @@
 //! that gets shared is one entry, not the site.
 
 use cairns_core::log::{Log, LogEntry};
-use pulldown_cmark::{Options, Parser, html};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -32,7 +32,10 @@ fn options() -> Options {
 fn markdown(text: &str) -> String {
     let mut out = String::new();
     html::push_html(&mut out, Parser::new_ext(text, options()));
-    out
+    // A wide table is the one thing allowed to scroll sideways, and only
+    // inside its own box - never the page.
+    out.replace("<table>", "<div class=\"table-scroll\"><table>")
+        .replace("</table>", "</table></div>")
 }
 
 /// The prose alone: the entry's own `# N. Title` and its open-question trailer
@@ -68,6 +71,129 @@ pub fn plain_md(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// One heading in an entry: its depth, its words, and the anchor it gets.
+pub struct Heading {
+    pub level: u8,
+    pub label: String,
+    pub id: String,
+}
+
+/// Render markdown, giving every heading an anchor and collecting them.
+///
+/// The anchors are what a table of contents needs, and an entry that runs to
+/// several sections is unreadable without one - `pulldown-cmark` emits no ids
+/// of its own, so they are assigned here before the HTML is pushed.
+fn markdown_with_headings(text: &str) -> (Vec<Heading>, String) {
+    let mut events: Vec<Event> = Parser::new_ext(text, options()).collect();
+    let mut headings = Vec::new();
+    let mut taken: BTreeMap<String, usize> = BTreeMap::new();
+
+    let mut at = 0;
+    while at < events.len() {
+        let Event::Start(Tag::Heading { level, .. }) = &events[at] else {
+            at += 1;
+            continue;
+        };
+        let depth = match level {
+            HeadingLevel::H1 => 1,
+            HeadingLevel::H2 => 2,
+            HeadingLevel::H3 => 3,
+            HeadingLevel::H4 => 4,
+            HeadingLevel::H5 => 5,
+            HeadingLevel::H6 => 6,
+        };
+
+        let mut label = String::new();
+        let mut end = at + 1;
+        while end < events.len() {
+            match &events[end] {
+                Event::End(TagEnd::Heading(_)) => break,
+                Event::Text(text) | Event::Code(text) => label.push_str(text),
+                _ => {}
+            }
+            end += 1;
+        }
+
+        // Two sections may be called the same thing; the anchors may not be.
+        let base = cairns_core::entry::slugify(&label);
+        let seen = taken.entry(base.clone()).or_insert(0);
+        *seen += 1;
+        let id = if *seen == 1 {
+            base
+        } else {
+            format!("{base}-{seen}")
+        };
+
+        if let Event::Start(Tag::Heading { id: slot, .. }) = &mut events[at] {
+            *slot = Some(id.clone().into());
+        }
+        headings.push(Heading {
+            level: depth,
+            label,
+            id,
+        });
+        at = end + 1;
+    }
+
+    let mut out = String::new();
+    html::push_html(&mut out, events.into_iter());
+    let out = out
+        .replace("<table>", "<div class=\"table-scroll\"><table>")
+        .replace("</table>", "</table></div>");
+    (headings, out)
+}
+
+/// Markdown whose relative links point into a repository rather than at the
+/// site, which is where a README's `docs/spec/entry.md` actually lives.
+fn markdown_linked(text: &str, repository: Option<&str>) -> String {
+    let Some(repo) = repository.map(|repo| repo.trim_end_matches('/').to_string()) else {
+        return markdown(text);
+    };
+    let into_repo = move |url: pulldown_cmark::CowStr<'_>| -> pulldown_cmark::CowStr<'static> {
+        let target = url.as_ref();
+        let absolute = target.is_empty()
+            || target.starts_with('#')
+            || target.contains("://")
+            || target.starts_with("mailto:")
+            || target.starts_with("//");
+        if absolute {
+            return target.to_string().into();
+        }
+        let clean = target.trim_start_matches("./");
+        format!("{repo}/blob/HEAD/{clean}").into()
+    };
+
+    let events = Parser::new_ext(text, options()).map(|event| match event {
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: into_repo(dest_url),
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: into_repo(dest_url),
+            title,
+            id,
+        }),
+        other => other,
+    });
+    let mut out = String::new();
+    html::push_html(&mut out, events);
+    out.replace("<table>", "<div class=\"table-scroll\"><table>")
+        .replace("</table>", "</table></div>")
+}
+
 /// An entry's prose as HTML, for the feed.
 pub fn body_html(entry: &LogEntry) -> String {
     markdown(prose(entry))
@@ -90,9 +216,37 @@ pub fn plain(entry: &LogEntry) -> String {
     out
 }
 
+/// Which shape of page this is. The index wants the width, an entry wants a
+/// reading column with its contents in the margin, and everything else wants
+/// the reading column on its own.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Layout {
+    Index,
+    Entry,
+    Read,
+}
+
+impl Layout {
+    fn class(self) -> &'static str {
+        match self {
+            Layout::Index => " wrap--index",
+            Layout::Entry => " wrap--entry",
+            Layout::Read => "",
+        }
+    }
+}
+
 /// The page shell. `rel` is the path back to the site root from this page, so
 /// one renderer serves the root pages and the entry pages alike.
-fn shell(log: &Log, title: &str, description: &str, url: &str, rel: &str, body: &str) -> String {
+fn shell(
+    log: &Log,
+    title: &str,
+    description: &str,
+    url: &str,
+    rel: &str,
+    layout: Layout,
+    body: &str,
+) -> String {
     let base = log.project.base_url.trim_end_matches('/');
     let mut out = String::new();
     let _ = write!(
@@ -115,16 +269,16 @@ fn shell(log: &Log, title: &str, description: &str, url: &str, rel: &str, body: 
 <link rel="stylesheet" href="{rel}style.css">
 </head>
 <body>
-<div class="wrap">
+<div class="wrap{wide}">
 <header class="masthead">
 <h1><a href="{rel}">{site}</a></h1>
-{tagline}<nav><a href="{rel}">Entries</a><a href="{rel}open/">Open questions</a><a href="{rel}feed.xml">Feed</a></nav>
+{tagline}<nav><a href="{rel}">Entries</a>{about}<a href="{rel}open/">Open questions</a><a href="{rel}feed.xml">Feed</a></nav>
 </header>
 {body}
 <footer>
-<p>A worklog. Newest last, append-only - a claim that turned out wrong is
-overturned by a later entry, never by editing the original.
-Generated by <a href="https://github.com/Toyz/cairns">cairns</a>.</p>
+<p>An append-only worklog: a claim that turned out wrong is overturned by a
+later entry, never by editing the original. Generated by
+<a href="https://github.com/Toyz/cairns">cairns</a>.</p>
 </footer>
 </div>
 </body>
@@ -140,6 +294,12 @@ Generated by <a href="https://github.com/Toyz/cairns">cairns</a>.</p>
             format!("<p>{}</p>\n", escape(&log.project.description))
         },
         base = escape(base),
+        wide = layout.class(),
+        about = if log.readme.is_some() {
+            format!("<a href=\"{rel}about/\">About</a>")
+        } else {
+            String::new()
+        },
     );
     out
 }
@@ -154,13 +314,21 @@ pub fn home(log: &Log) -> String {
     let mut body = String::new();
 
     body.push_str("<div class=\"controls\">\n");
-    let _ = write!(
+    let _ = writeln!(
         body,
         "<input type=\"search\" id=\"q\" placeholder=\"Search {} entries\" \
-         autocomplete=\"off\" spellcheck=\"false\">\n<span id=\"status\"></span>\n",
+         autocomplete=\"off\" spellcheck=\"false\">",
         log.entries.len()
     );
-    body.push_str("</div>\n<div class=\"chips\">\n");
+    // Newest first is what someone checking back wants, and it is the order the
+    // page ships in so it holds with scripting off. Oldest first is for reading
+    // the thing through, which is the other half of why anyone opens a worklog.
+    body.push_str(
+        "<div class=\"sort\" role=\"group\" aria-label=\"Order\">\n\
+         <button data-sort=\"new\" aria-pressed=\"true\">Newest</button>\n\
+         <button data-sort=\"old\" aria-pressed=\"false\">Oldest</button>\n\
+         </div>\n</div>\n<div class=\"chips\">\n",
+    );
     for area in log.areas.iter().filter(|area| area.count > 0) {
         let _ = writeln!(
             body,
@@ -171,26 +339,32 @@ pub fn home(log: &Log) -> String {
             count = area.count
         );
     }
-    body.push_str("</div>\n<ul class=\"entries\" id=\"entries\">\n");
+    body.push_str("</div>\n<p id=\"status\"></p>\n<ul class=\"entries\" id=\"entries\">\n");
 
-    for entry in &log.entries {
-        let _ = write!(
+    for entry in log.entries.iter().rev() {
+        let _ = writeln!(
             body,
             "<li data-n=\"{n}\" data-areas=\"{areas}\">\n\
-             <h2><span class=\"no\">{n}</span><a href=\"{path}/\">{title}</a></h2>\n",
+             <span class=\"no\">{n}</span>\n<div class=\"entry\">\n\
+             <h2><a href=\"{path}/\">{title}</a></h2>",
             n = entry.number,
             areas = escape(&entry.areas.join(" ")),
             path = escape(&path_of(entry)),
             title = escape(&entry.title)
         );
         if let Some(summary) = &entry.summary {
-            let _ = writeln!(body, "<p>{}</p>", escape(&plain_md(summary)));
+            let _ = writeln!(
+                body,
+                "<p class=\"summary\">{}</p>",
+                escape(&plain_md(summary))
+            );
         }
-        let _ = write!(
+        let _ = writeln!(
             body,
-            "<p class=\"meta\">{date} &middot; {areas}</p>\n</li>\n",
+            "<p class=\"meta\"><time datetime=\"{date}\">{date}</time>\
+             <span class=\"areas\">{areas}</span></p>\n</div>\n</li>",
             date = entry.date,
-            areas = escape(&entry.areas.join(", "))
+            areas = escape(&entry.areas.join(" \u{00b7} "))
         );
     }
 
@@ -201,7 +375,15 @@ pub fn home(log: &Log) -> String {
     } else {
         plain_md(&log.project.description)
     };
-    shell(log, &log.project.name, &description, base, "./", &body)
+    shell(
+        log,
+        &log.project.name,
+        &description,
+        base,
+        "./",
+        Layout::Index,
+        &body,
+    )
 }
 
 /// One entry, with its corrections, its open question, and its neighbours.
@@ -210,9 +392,13 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     let mut body = String::from("<article>\n");
 
     let _ = writeln!(body, "<h1>{}</h1>", escape(&this.title));
-    let _ = write!(body, "<p class=\"dateline\">{} &middot; ", this.date);
+    let _ = write!(
+        body,
+        "<p class=\"dateline\"><time datetime=\"{date}\">{date}</time>",
+        date = this.date
+    );
     for area in &this.areas {
-        let _ = write!(body, "<span class=\"chip\">{}</span> ", escape(area));
+        let _ = write!(body, "<span class=\"chip\">{}</span>", escape(area));
     }
     body.push_str("</p>\n");
 
@@ -244,7 +430,8 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         body.push_str("</div>\n");
     }
 
-    body.push_str(&markdown(prose(this)));
+    let (headings, prose_html) = markdown_with_headings(prose(this));
+    body.push_str(&prose_html);
 
     if let Some(unknown) = &this.still_unknown {
         let _ = writeln!(
@@ -258,7 +445,7 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         let previous = &log.entries[at - 1];
         let _ = writeln!(
             body,
-            "<a class=\"prev\" href=\"../{}/\">&larr; {}</a>",
+            "<a class=\"prev\" href=\"../{}/\"><span class=\"label\">Previous</span>{}</a>",
             escape(&path_of(previous)),
             escape(&previous.title)
         );
@@ -267,16 +454,52 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         let next = &log.entries[at + 1];
         let _ = writeln!(
             body,
-            "<a class=\"next\" href=\"../{}/\">{} &rarr;</a>",
+            "<a class=\"next\" href=\"../{}/\"><span class=\"label\">Next</span>{}</a>",
             escape(&path_of(next)),
             escape(&next.title)
         );
     }
     body.push_str("</nav>\n");
 
+    // Sections and their subsections both, because an entry long enough to
+    // want a contents list is long enough for its subsections to be where the
+    // reader is actually trying to get to.
+    let sections: Vec<&Heading> = headings
+        .iter()
+        .filter(|heading| heading.level == 2 || heading.level == 3)
+        .collect();
+    let contents = if sections.len() < 2 {
+        String::new()
+    } else {
+        let mut toc = String::from(
+            "<nav class=\"toc\" aria-label=\"Contents\">\n\
+                                    <p class=\"toc-label\">Contents</p>\n<ol>\n",
+        );
+        for section in &sections {
+            let _ = writeln!(
+                toc,
+                "<li class=\"toc-{}\"><a href=\"#{}\">{}</a></li>",
+                section.level,
+                escape(&section.id),
+                escape(&section.label)
+            );
+        }
+        toc.push_str("</ol>\n</nav>\n");
+        toc
+    };
+    let body = format!("{contents}{body}");
+
     let description = plain_md(this.summary.as_deref().unwrap_or(&this.title));
     let title = format!("{}. {}", this.number, this.title);
-    shell(log, &title, &description, &this.url, "../", &body)
+    shell(
+        log,
+        &title,
+        &description,
+        &this.url,
+        "../",
+        Layout::Entry,
+        &body,
+    )
 }
 
 /// Everything the log has not closed out, in one place.
@@ -322,6 +545,38 @@ pub fn open_questions(log: &Log) -> String {
         "What this log has not closed out.",
         &format!("{base}/open/"),
         "../",
+        Layout::Read,
+        &body,
+    )
+}
+
+/// The project's README, so a reader who arrives at a worklog can find out
+/// what the project is - and how to install it.
+pub fn about(log: &Log) -> String {
+    let base = log.project.base_url.trim_end_matches('/');
+    let readme = log.readme.as_deref().unwrap_or_default();
+
+    // Its own `# Title` is the project name, which the masthead already says.
+    let body_md = match readme.trim_start().strip_prefix("# ") {
+        Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
+        None => readme,
+    };
+
+    let body = format!(
+        "<article>\n<h1>About</h1>\n{}</article>\n",
+        markdown_linked(body_md, log.project.repository.as_deref())
+    );
+    shell(
+        log,
+        &format!("About - {}", log.project.name),
+        &if log.project.description.is_empty() {
+            format!("What {} is.", log.project.name)
+        } else {
+            plain_md(&log.project.description)
+        },
+        &format!("{base}/about/"),
+        "../",
+        Layout::Read,
         &body,
     )
 }
