@@ -53,6 +53,13 @@ prose lines identical on both sides, and renders in 95 ms.
 curl -fsSL https://raw.githubusercontent.com/Toyz/cairns/main/install.sh | sh
 ```
 
+Homebrew - this repo is its own tap, so there is no second repository to add:
+
+```sh
+brew tap Toyz/cairns https://github.com/Toyz/cairns
+brew install cairns
+```
+
 Or, with a Rust toolchain:
 
 ```sh
@@ -65,8 +72,8 @@ release number - the tag does, and CI applies it. The binary is the same; only
 
 The script takes the right binary for your platform from the latest
 [release](https://github.com/Toyz/cairns/releases) and checks it against that
-release's `SHA256SUMS` before installing anything. It is not on crates.io or in
-a Homebrew tap yet, so those are the two ways in. `CAIRNS_VERSION` pins a tag,
+release's `SHA256SUMS` before installing anything. It is not on crates.io, so
+those are the ways in. `CAIRNS_VERSION` pins a tag,
 `CAIRNS_BIN_DIR` chooses where it lands (default `~/.local/bin`). Binaries are
 built for macOS on both architectures, Linux gnu and musl, and Windows.
 

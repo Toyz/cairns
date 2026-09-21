@@ -71,6 +71,36 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
+  # This repo is its own Homebrew tap, so the formula is updated here rather
+  # than in a second repository behind a personal access token.
+  formula:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+          path: dist
+      - run: cd dist && sha256sum cairns-* > SHA256SUMS
+      - run: ./scripts/update-formula.sh "${{ github.ref_name }}" dist/SHA256SUMS
+      - name: Commit it
+        run: |
+          set -eu
+          if git diff --quiet -- Formula/cairns.rb; then
+            echo "formula already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/cairns.rb
+          git commit -m "formula: ${{ github.ref_name }}"
+          git push origin main
+
   # Opt-in: set the repository variable PUBLISH_TO_CRATES to "true" and add a
   # CARGO_REGISTRY_TOKEN secret. Without both, a tag only cuts binaries.
   crates:
