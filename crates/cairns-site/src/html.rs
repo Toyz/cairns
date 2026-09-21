@@ -821,11 +821,19 @@ fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
         .iter()
         .filter(|doc| doc.section == within && !doc.is_index)
         .collect();
-    let folders: Vec<&DocPage> = log
+
+    // Folders come from the directories themselves, not only from directories
+    // that happen to contain a README. Hellbender's docs tree has four
+    // subdirectories and no index page in any of them, and deriving folders
+    // from index pages alone left its rail empty.
+    let mut folders: Vec<String> = log
         .docs
         .iter()
-        .filter(|doc| doc.section == within && doc.is_index)
+        .filter_map(|doc| child_section(within, &doc.section))
         .collect();
+    folders.sort();
+    folders.dedup();
+
     if pages.is_empty() && folders.is_empty() {
         return String::new();
     }
@@ -847,12 +855,44 @@ fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
         let _ = writeln!(out, "<li>{}</li>", link(doc));
     }
     for folder in folders {
-        let _ = writeln!(out, "<li class=\"folder\">{}", link(folder));
-        out.push_str(&branch(log, rel, here, &folder.slug));
+        // A folder with its own page is a link to it; one without is a label.
+        let named = log
+            .docs
+            .iter()
+            .find(|doc| doc.is_index && doc.slug == folder);
+        let heading = match named {
+            Some(doc) => link(doc),
+            None => format!(
+                "<span>{}</span>",
+                escape(folder.rsplit('/').next().unwrap_or(&folder))
+            ),
+        };
+        let _ = writeln!(out, "<li class=\"folder\">{heading}");
+        out.push_str(&branch(log, rel, here, &folder));
         out.push_str("</li>\n");
     }
     out.push_str("</ul>\n");
     out
+}
+
+/// `section` as a direct child of `within`, or `None` if it is not one.
+///
+/// `formats` is a child of ``; `formats/x` is not - it is a child of `formats`.
+fn child_section(within: &str, section: &str) -> Option<String> {
+    if section.is_empty() || section == within {
+        return None;
+    }
+    let rest = if within.is_empty() {
+        section
+    } else {
+        section.strip_prefix(within)?.strip_prefix('/')?
+    };
+    let head = rest.split('/').next()?;
+    Some(if within.is_empty() {
+        head.to_string()
+    } else {
+        format!("{within}/{head}")
+    })
 }
 
 /// The reference index: sections as headings, pages as the same list the
@@ -862,13 +902,38 @@ pub fn docs_index(log: &Log) -> String {
     let base = log.project.base_url.trim_end_matches('/');
     let label = log.docs_label.as_deref().unwrap_or("Reference");
 
-    let mut body = format!("<article>\n<h1>{}</h1>\n", escape(label));
-    let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
-    let _ = writeln!(
-        body,
-        "<p class=\"lead\">{pages} pages: what is true, flatly. The log says how \
-         it was found out.</p>"
-    );
+    // The docs root may have its own README. When it does, that is the page;
+    // the generated lead is only there for a tree that has none.
+    let root = log
+        .docs
+        .iter()
+        .find(|doc| doc.is_index && doc.slug.is_empty());
+    let mut body = String::from("<article>\n");
+    match root {
+        Some(doc) => {
+            let _ = writeln!(body, "<h1>{}</h1>", escape(&doc.title));
+            let links = Links {
+                log,
+                from_dir: doc_dir(doc),
+                rel: "../",
+                base: None,
+            };
+            let stripped = match doc.body.trim_start().strip_prefix("# ") {
+                Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
+                None => doc.body.as_str(),
+            };
+            body.push_str(&markdown_with_headings(stripped, &links).1);
+        }
+        None => {
+            let _ = writeln!(body, "<h1>{}</h1>", escape(label));
+            let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
+            let _ = writeln!(
+                body,
+                "<p class=\"lead\">{pages} pages: what is true, flatly. The log says \
+                 how it was found out.</p>"
+            );
+        }
+    }
     body.push_str(&sections(log, "", ""));
     body.push_str("</article>\n");
 
@@ -908,7 +973,7 @@ fn sections(log: &Log, within: &str, rel: &str) -> String {
     for index in log
         .docs
         .iter()
-        .filter(|doc| doc.is_index && doc.section == within)
+        .filter(|doc| doc.is_index && doc.section == within && doc.slug != within)
     {
         let _ = writeln!(
             out,
@@ -931,6 +996,10 @@ fn sections(log: &Log, within: &str, rel: &str) -> String {
         out.push_str("</ul>\n");
     }
     out
+}
+
+fn doc_dir(doc: &DocPage) -> &str {
+    doc.path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
 }
 
 fn doc_row(doc: &DocPage, rel: &str) -> String {
@@ -1038,7 +1107,7 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
     }
     body.push_str("</p>\n");
 
-    let from_dir = doc.path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let from_dir = doc_dir(doc);
     let links = Links {
         log,
         from_dir,
@@ -1097,5 +1166,28 @@ mod tests {
             from_repo_root("log/entries", "../../docs/x.md"),
             "docs/x.md"
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::child_section;
+
+    #[test]
+    fn a_section_is_a_child_of_exactly_one_folder() {
+        assert_eq!(child_section("", "formats").as_deref(), Some("formats"));
+        assert_eq!(
+            child_section("", "formats/inner").as_deref(),
+            Some("formats")
+        );
+        assert_eq!(
+            child_section("formats", "formats/inner").as_deref(),
+            Some("formats/inner")
+        );
+        // Its own section is not a child of itself - this is the shape that
+        // recursed until the stack ran out.
+        assert_eq!(child_section("formats", "formats"), None);
+        assert_eq!(child_section("", ""), None);
+        assert_eq!(child_section("port", "formats"), None);
     }
 }

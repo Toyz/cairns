@@ -61,6 +61,11 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     if !log.docs.is_empty() {
         rendered.push("docs/index.html", html::docs_index(log));
         for doc in &log.docs {
+            // The docs root's own README is already rendered as the index by
+            // `docs_index`; giving it a page of its own writes `docs//`.
+            if doc.slug.is_empty() {
+                continue;
+            }
             rendered.push(
                 format!("docs/{}/index.html", doc.slug),
                 html::doc_page(log, doc),
@@ -312,6 +317,68 @@ mod tests {
         assert!(
             xml.contains("log.json"),
             "nothing points at the complete document"
+        );
+    }
+}
+
+#[cfg(test)]
+mod docs_tests {
+    use super::*;
+    use cairns_core::{Config, Doc, Entry, RawEntry};
+
+    fn built(paths: &[&str]) -> Log {
+        let config = Config::parse(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n\
+             [site]\nbase_url = \"https://example.com/p/\"\n\
+             [docs]\ndir = \"docs\"\n[[area]]\nname = \"spec\"\n",
+        )
+        .unwrap();
+        let entry = Entry::parse(&RawEntry {
+            path: "worklog/0001-t.md".into(),
+            bytes:
+                b"---\nnumber: 1\ntitle: T\ndate: 2026-09-20\narea: spec\n---\n\n# 1. T\n\nProse.\n"
+                    .to_vec(),
+        })
+        .unwrap();
+        let docs: Vec<Doc> = paths
+            .iter()
+            .map(|path| {
+                Doc::parse(&RawEntry {
+                    path: (*path).into(),
+                    bytes: format!("---\ntitle: {path}\n---\n\n# {path}\n\nProse.\n").into_bytes(),
+                })
+                .unwrap()
+            })
+            .collect();
+        Log::build_with(&config, vec![entry], docs, None)
+    }
+
+    /// Hellbender's `docs/README.md` has an empty slug and an empty section, so
+    /// it was its own parent and the tree recursed until the stack ran out.
+    /// This renders it; a regression is a crash, not a failed assertion.
+    #[test]
+    fn a_docs_root_readme_is_not_its_own_parent() {
+        let log = built(&["docs/README.md", "docs/formats/pod.md", "docs/port/plan.md"]);
+        let rendered = render(&log).expect("renders");
+
+        let paths: Vec<&str> = rendered.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"docs/index.html"));
+        assert!(paths.contains(&"docs/formats/pod/index.html"));
+        // The root README is the docs index, not a page of its own.
+        assert!(
+            !paths.iter().any(|path| path.contains("docs//")),
+            "{paths:?}"
+        );
+
+        let index = rendered
+            .files
+            .iter()
+            .find(|f| f.path == "docs/index.html")
+            .unwrap();
+        let html = String::from_utf8(index.bytes.clone()).unwrap();
+        assert!(
+            !html.contains("docs//"),
+            "a link points at the docs root as a child"
         );
     }
 }

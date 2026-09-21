@@ -78,18 +78,7 @@ impl Doc {
             .and_then(|text| Status::parse(&text));
         let worklog = fields
             .remove("worklog")
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .map(|part| {
-                        part.parse::<u32>().map_err(|_| {
-                            format!("`worklog` has {part:?} in it, which is not an entry number")
-                        })
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()
-            })
+            .map(|value| cited(&value))
             .transpose()
             .map_err(|problem| Error::entry(&raw.path, problem))?
             .unwrap_or_default();
@@ -182,4 +171,56 @@ fn slug_of(path: &str) -> String {
         .strip_suffix(".md")
         .unwrap_or(path)
         .to_string()
+}
+
+/// The entry numbers a page cites.
+///
+/// Comma separated, and a part may be a range: a page established over a run of
+/// entries is naturally written `7 to 20`, and hellbender's port plan was
+/// written that way before this tool existed. Both `7 to 20` and `7-20` expand,
+/// inclusive.
+fn cited(value: &str) -> std::result::Result<Vec<u32>, String> {
+    let mut numbers = Vec::new();
+    for part in value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let range = part
+            .split_once(" to ")
+            .or_else(|| part.split_once('-'))
+            .map(|(from, to)| (from.trim(), to.trim()));
+
+        let bad = || format!("`worklog` has {part:?} in it, which is not an entry number");
+        match range {
+            Some((from, to)) => {
+                let from: u32 = from.parse().map_err(|_| bad())?;
+                let to: u32 = to.parse().map_err(|_| bad())?;
+                if to < from {
+                    return Err(format!(
+                        "`worklog` has {part:?} in it, which counts backwards"
+                    ));
+                }
+                numbers.extend(from..=to);
+            }
+            None => numbers.push(part.parse().map_err(|_| bad())?),
+        }
+    }
+    numbers.dedup();
+    Ok(numbers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cited;
+
+    #[test]
+    fn a_page_may_cite_numbers_or_a_range() {
+        assert_eq!(cited("3, 29, 30").unwrap(), vec![3, 29, 30]);
+        assert_eq!(cited("7 to 10").unwrap(), vec![7, 8, 9, 10]);
+        assert_eq!(cited("7-9, 12").unwrap(), vec![7, 8, 9, 12]);
+        assert_eq!(cited("5").unwrap(), vec![5]);
+        assert!(cited("nine").is_err());
+        assert!(cited("20 to 7").unwrap_err().contains("backwards"));
+    }
 }
