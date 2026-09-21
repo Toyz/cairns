@@ -244,6 +244,12 @@ fn tools(config: &Config, writable: bool) -> Vec<Value> {
                         "type": "array", "items": { "type": "integer" },
                         "description": "Entries this one corrects. Set it whenever you overturn a claim.",
                     },
+                    "resolves": {
+                        "type": "array", "items": { "type": "integer" },
+                        "description": "Entries whose open question this one answers. Not the same \
+                                        as superseding: answering a question does not make the entry \
+                                        that asked it wrong.",
+                    },
                 },
                 "required": ["title", "area", "body"],
             },

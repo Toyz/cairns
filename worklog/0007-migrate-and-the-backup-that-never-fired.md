@@ -3,6 +3,7 @@ number: 7
 title: Migrate, and the backup that never fired
 date: 2026-09-20
 area: cli, adoption
+resolves: 6
 files: crates/cairns/src/main.rs
 ---
 

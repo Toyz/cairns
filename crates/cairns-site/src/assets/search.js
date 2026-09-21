@@ -97,23 +97,33 @@
     box.addEventListener("input", function () { load().then(apply); });
   }
 
-  // A shared link carries its order and its filters.
-  var hash = location.hash.replace(/^#/, "");
-  if (hash) {
+  // A shared link carries its order and its filters - and so does an area
+  // pill on an entry page, which links back here with one already chosen.
+  function fromHash() {
+    var hash = location.hash.replace(/^#/, "");
+    picked.clear();
+    var wanted = "new";
     hash.split("&").forEach(function (part) {
       var pair = part.split("=");
-      if (pair[0] === "sort" && pair[1] === "old") order = "old";
+      if (pair[0] === "sort" && pair[1] === "old") wanted = "old";
       if (pair[0] === "area" && pair[1]) {
         decodeURIComponent(pair[1]).split(",").forEach(function (area) { picked.add(area); });
       }
     });
+    if (wanted !== order) {
+      order = wanted;
+      reorder();
+    }
     sorters.forEach(function (button) {
       button.setAttribute("aria-pressed", button.dataset.sort === order ? "true" : "false");
     });
     chips.forEach(function (chip) {
-      if (picked.has(chip.dataset.area)) chip.setAttribute("aria-pressed", "true");
+      chip.setAttribute("aria-pressed", picked.has(chip.dataset.area) ? "true" : "false");
     });
-    if (order === "old") reorder();
     apply();
   }
+
+  // Arriving with a hash, and changing it without leaving the page.
+  if (location.hash) fromHash();
+  window.addEventListener("hashchange", fromHash);
 })();

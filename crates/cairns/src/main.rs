@@ -34,6 +34,12 @@ enum Command {
         area: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         files: Vec<String>,
+        /// Earlier entries this one corrects.
+        #[arg(long, value_delimiter = ',')]
+        supersedes: Vec<u32>,
+        /// Earlier entries whose open question this one answers.
+        #[arg(long, value_delimiter = ',')]
+        resolves: Vec<u32>,
     },
     /// The number the next entry would take.
     Next,
@@ -183,7 +189,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("{} entries -> {}", built.entries.len(), out.display());
         }
 
-        Command::New { title, area, files } => {
+        Command::New {
+            title,
+            area,
+            files,
+            supersedes,
+            resolves,
+        } => {
             let (root, config) = load()?;
             // `--area "a, b"` and `--area a,b` are the same thing. The front
             // matter parser accepts both spellings because the spec says it
@@ -211,16 +223,25 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
 
             let today = jiff::Zoned::now().date();
-            let files_line = if files.is_empty() {
-                String::new()
-            } else {
-                format!("files: {}\n", files.join(", "))
+            let line = |key: &str, values: &[String]| {
+                if values.is_empty() {
+                    String::new()
+                } else {
+                    format!("{key}: {}\n", values.join(", "))
+                }
             };
+            let numbers = |values: &[u32]| values.iter().map(u32::to_string).collect::<Vec<_>>();
+            let links = format!(
+                "{}{}{}",
+                line("files", &files),
+                line("supersedes", &numbers(&supersedes)),
+                line("resolves", &numbers(&resolves)),
+            );
             std::fs::write(
                 &path,
                 format!(
                     "---\nnumber: {number}\ntitle: {title}\ndate: {today}\n\
-                     area: {}\n{files_line}---\n\n# {number}. {title}\n\n\n\n\
+                     area: {}\n{links}---\n\n# {number}. {title}\n\n\n\n\
                      **Still unknown:** \n",
                     area.join(", ")
                 ),

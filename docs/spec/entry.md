@@ -66,6 +66,7 @@ promise - the subset is the spec.
 | `summary` | no | text | one sentence; the index blurb and link preview |
 | `slug` | no | text | overrides the derived slug; frozen once published |
 | `supersedes` | no | list of integers | entries this one corrects or revisits |
+| `resolves` | no | list of integers | entries whose open question this one answers |
 
 Unknown fields are preserved and passed through to `log.json` untouched. A
 future field must never be a breaking change.
@@ -78,6 +79,16 @@ whichever the entry happened to use. Readers accept either.
 it is good enough for the index; writing it explicitly is better for a link
 someone posts somewhere, because that is the sentence that has to earn the
 click.
+
+`resolves` is the other half of the same idea, and is deliberately *not*
+`supersedes`. An entry that answers a question another entry left open has not
+shown that entry to be wrong - it has closed something it opened. Conflating the
+two would lose the distinction that makes either worth recording.
+
+A question with a `resolves` pointing at it leaves the log's open questions. It
+stays on the entry that asked it, struck through, naming what closed it.
+`check` rejects a `resolves` aimed at an entry that left no question open,
+because that is almost always the wrong number and nothing else would catch it.
 
 `supersedes` is what makes the append-only rule pay off. Entry 50 of hellbender
 demonstrates the case exactly - it overturns a claim made in entry 6 - and with

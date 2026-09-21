@@ -68,6 +68,13 @@ pub struct LogEntry {
     /// recorded once, on the only entry that could have known about it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub superseded_by: Vec<u32>,
+    /// Entries whose open question this one answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolves: Vec<u32>,
+    /// Derived: the entries that answered this one's open question. While this
+    /// is non-empty the question is closed and is not in `open_questions`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_by: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_unknown: Option<String>,
     /// Markdown, not HTML. A newer renderer can re-render an old log, and a
@@ -90,12 +97,16 @@ impl Log {
         entries.sort_by_key(|entry| entry.front.number);
 
         let mut corrected: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        let mut answered: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for entry in &entries {
             for older in &entry.front.supersedes {
                 corrected
                     .entry(*older)
                     .or_default()
                     .push(entry.front.number);
+            }
+            for older in &entry.front.resolves {
+                answered.entry(*older).or_default().push(entry.front.number);
             }
         }
 
@@ -109,7 +120,13 @@ impl Log {
                 *counts.entry(area.as_str()).or_default() += 1;
             }
             let still_unknown = entry.still_unknown();
-            if let Some(text) = &still_unknown {
+            let resolved_by = answered
+                .get(&entry.front.number)
+                .cloned()
+                .unwrap_or_default();
+            // A question a later entry answered is no longer open. It stays on
+            // the entry that asked it, pointing at the one that closed it.
+            if let (Some(text), true) = (&still_unknown, resolved_by.is_empty()) {
                 open_questions.push(OpenQuestion {
                     entry: entry.front.number,
                     text: text.clone(),
@@ -133,6 +150,8 @@ impl Log {
                     .get(&entry.front.number)
                     .cloned()
                     .unwrap_or_default(),
+                resolves: entry.front.resolves.clone(),
+                resolved_by,
                 still_unknown,
                 body: entry.body.clone(),
                 content_hash: entry.content_hash.clone(),
@@ -219,6 +238,91 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
                 ));
             }
         }
+
+        for older in &entry.front.resolves {
+            match entries.iter().find(|other| other.front.number == *older) {
+                None => problems.push(format!(
+                    "{}: resolves {older}, which does not exist",
+                    entry.path
+                )),
+                // Answering an entry that asked nothing is a sign the number is
+                // wrong, and it is the kind of mistake nothing else would show.
+                Some(other) if other.still_unknown().is_none() => problems.push(format!(
+                    "{}: resolves {older}, which left no open question",
+                    entry.path
+                )),
+                Some(_) => {}
+            }
+            if *older >= number {
+                problems.push(format!(
+                    "{}: resolves {older}, which is not an earlier entry",
+                    entry.path
+                ));
+            }
+        }
     }
     problems
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Entry, RawEntry};
+
+    fn config() -> Config {
+        Config::parse(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n[[area]]\nname = \"spec\"\n",
+        )
+        .unwrap()
+    }
+
+    fn entry(number: u32, front: &str, body: &str) -> Entry {
+        let text = format!(
+            "---\nnumber: {number}\ntitle: Title {number}\ndate: 2026-09-20\narea: spec\n{front}---\n\n\
+             # {number}. Title {number}\n\n{body}\n"
+        );
+        Entry::parse(&RawEntry {
+            path: format!("worklog/{number:04}-title-{number}.md"),
+            bytes: text.into_bytes(),
+        })
+        .unwrap()
+    }
+
+    /// Worklog 12: this validation was written twice and landed once, because
+    /// the edit that added it missed its anchor and said nothing.
+    #[test]
+    fn resolving_an_entry_that_asked_nothing_is_rejected() {
+        let closed = entry(1, "", "Prose.\n\n**Still unknown:** nothing");
+        let answering = entry(2, "resolves: 1\n", "Prose.");
+        let found = problems(&config(), &[closed, answering]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("left no open question"), "{found:?}");
+    }
+
+    #[test]
+    fn resolving_a_question_that_was_asked_is_accepted_and_closes_it() {
+        let asking = entry(1, "", "Prose.\n\n**Still unknown:** whether it works.");
+        let answering = entry(2, "resolves: 1\n", "It works.");
+        let entries = vec![asking, answering];
+        assert!(problems(&config(), &entries).is_empty());
+
+        let built = Log::build(&config(), entries, None);
+        assert!(
+            built.open_questions.is_empty(),
+            "the question is still listed as open"
+        );
+        assert_eq!(built.entries[0].resolved_by, vec![2]);
+        // It stays on the entry that asked it; only the open list drops it.
+        assert!(built.entries[0].still_unknown.is_some());
+    }
+
+    #[test]
+    fn a_resolves_pointing_forwards_or_nowhere_is_rejected() {
+        let asking = entry(1, "", "Prose.\n\n**Still unknown:** whether it works.");
+        let wrong = entry(2, "resolves: 9\n", "Prose.");
+        let found = problems(&config(), &[asking, wrong]);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().any(|p| p.contains("does not exist")));
+        assert!(found.iter().any(|p| p.contains("not an earlier entry")));
+    }
 }

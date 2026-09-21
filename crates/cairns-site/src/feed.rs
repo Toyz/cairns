@@ -64,7 +64,7 @@ pub fn atom(log: &Log) -> String {
             summary = escape(&crate::html::plain_md(
                 entry.summary.as_deref().unwrap_or(&entry.title)
             )),
-            content = escape(&crate::html::body_html(entry)),
+            content = escape(&crate::html::body_html(log, entry)),
         );
     }
 

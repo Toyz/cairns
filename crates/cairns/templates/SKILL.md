@@ -82,6 +82,7 @@ title: A short title in plain words
 date: 2026-09-20
 area: {{areas_written}}
 files: src/thing.rs
+supersedes: 6
 ---
 
 # 12. A short title in plain words
@@ -100,18 +101,28 @@ Sub-headings inside an entry use `##` - the entry's own title is the `#`.
 across the whole log. It is the log's list of what the project does not yet
 know, so it is worth writing honestly rather than leaving blank.
 
-## Correcting an earlier entry
+## Linking an entry to an earlier one
 
-The log is append-only. Never rewrite or renumber an entry. When something in an
-earlier one turns out to be wrong, write a *later* entry saying what changed and
-why, and name the entry it overturns in front matter:
+The log is append-only. Never rewrite or renumber an entry. Two front matter
+fields carry everything that would otherwise tempt you to edit one, and both
+take one or more entry numbers:
 
+```sh
+cairns new "What changed" --area {{first_area}} --supersedes 6
+cairns new "What it turned out to be" --area {{first_area}} --resolves 6
 ```
-supersedes: 6
-```
 
-The reader who lands on entry 6 is then told that 12 overturned it. This is the
+**`supersedes`** - this entry overturns something an earlier one claimed. The
+reader who lands on entry 6 is then told that 12 corrected it. This is the
 single most valuable edge in the log, and it only exists if you record it.
+
+**`resolves`** - this entry answers the question an earlier one left open. That
+question then leaves the open-questions list, and entry 6 keeps it, struck
+through, naming what closed it.
+
+They are not interchangeable. Answering a question does not mean the entry that
+asked it was wrong, and `check` will reject a `resolves` aimed at an entry that
+left no question open.
 
 ## Rules
 

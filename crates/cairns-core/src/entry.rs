@@ -27,6 +27,11 @@ pub struct FrontMatter {
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supersedes: Vec<u32>,
+    /// Entries whose open question this one answers. Distinct from
+    /// `supersedes`: answering a question does not mean the entry that asked
+    /// it was wrong.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolves: Vec<u32>,
     /// Keys the spec does not define, passed through untouched so a project can
     /// carry its own metadata without forking the format.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -139,20 +144,25 @@ impl FrontMatter {
         }
 
         let files = fields.remove("files").map(|v| list(&v)).unwrap_or_default();
-        let supersedes = fields
-            .remove("supersedes")
-            .map(|v| {
-                list(&v)
-                    .iter()
-                    .map(|n| {
-                        n.parse::<u32>().map_err(|_| {
-                            format!("`supersedes` has {n:?} in it, which is not an entry number")
+        // `supersedes` and `resolves` are both lists of earlier entry numbers,
+        // and both are wrong in the same ways.
+        let numbers = |fields: &mut BTreeMap<String, String>, key: &'static str| {
+            fields
+                .remove(key)
+                .map(|value| {
+                    list(&value)
+                        .iter()
+                        .map(|n| {
+                            n.parse::<u32>().map_err(|_| {
+                                format!("`{key}` has {n:?} in it, which is not an entry number")
+                            })
                         })
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                })
+                .transpose()
+        };
+        let supersedes = numbers(&mut fields, "supersedes")?.unwrap_or_default();
+        let resolves = numbers(&mut fields, "resolves")?.unwrap_or_default();
 
         Ok(FrontMatter {
             number,
@@ -163,6 +173,7 @@ impl FrontMatter {
             summary: fields.remove("summary").filter(|s| !s.is_empty()),
             slug: fields.remove("slug").filter(|s| !s.is_empty()),
             supersedes,
+            resolves,
             extra: fields,
         })
     }

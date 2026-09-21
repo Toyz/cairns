@@ -52,6 +52,8 @@ whichever output nobody was looking at.
       "summary": "Every per-level .MIX in GAME.POD is zero bytes except KREASH.MIX ...",
       "supersedes": [6],
       "superseded_by": [],
+      "resolves": [],
+      "resolved_by": [],
       "still_unknown": "the span loop that would prove it has not been found yet",
       "body": "The colour tables page had three unknowns ...",
       "content_hash": "sha256:9f2a...",
@@ -80,6 +82,11 @@ is the field the site uses to tell a reader standing on entry 6 that entry 50
 later overturned it. Deriving rather than storing it keeps the correction
 recorded in exactly one place - the later entry, which is the only one that
 could have known.
+
+**`resolved_by` is derived** the same way, by inverting every `resolves`. While
+it is non-empty the entry's question is closed and is absent from
+`open_questions`, so the list is what the project does *not yet* know rather
+than everything it has ever wondered.
 
 **`still_unknown` and `open_questions`.** The former is the entry's own trailer,
 parsed out; the latter is every unresolved one collected in entry order, which
