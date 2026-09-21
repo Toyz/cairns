@@ -86,6 +86,24 @@ One optional key, `header`, replacing the generated opening prose of
 `WORKLOG.md`. Everything else in that file is derived, which is why it is never
 hand-edited.
 
+## `[check]`
+
+```toml
+[check]
+open_questions = "required"   # or "optional"
+```
+
+`required` is the default: every entry must end with a `**Still unknown:**`
+line, saying what it left open or the word `nothing`. The log's most useful
+derived output is the list of what the project does not yet know, and an entry
+that omits the line leaves that list silently - which is how hellbender's
+`cairns open` came to report the state of the project as of entry 33 while
+twenty-six later entries said nothing at all.
+
+`optional` is for a log that predates the convention. `cairns init` writes it,
+with a comment, when it finds entries without the line, so adopting cairns
+never fails on history.
+
 ## `[docs]`
 
 Reference pages beside the log, and entirely optional - a worklog is useful on

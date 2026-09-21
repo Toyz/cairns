@@ -116,6 +116,17 @@ after it on that paragraph is parsed out and collected into the log's open
 questions, so a project can ask what it does not yet know across every entry at
 once. The literal string `nothing` closes the entry out.
 
+Every entry must carry the line, and `check` says so. An entry that simply
+omits it drops out of the log's open questions silently - hellbender lost
+twenty-six entries that way without a single complaint, because a missing
+convention is not a broken one. Writing `nothing` is a deliberate act; leaving
+it out is not, and the two should not look the same. A blank trailer is the
+same fault and is reported the same way.
+
+A log adopted from before the convention can relax it - see `[check]` in
+[config.md](config.md) - and `cairns init` does that automatically rather than
+failing on history.
+
 The marker must **begin a line**, and where several qualify the **last** one is
 the trailer. An entry is entitled to mention the marker in its prose - a log
 about this format will do it constantly - and an unanchored search reads that

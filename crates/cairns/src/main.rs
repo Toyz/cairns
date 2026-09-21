@@ -300,6 +300,34 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
             }
 
+            // Adoption preserves what is there, the same way it freezes slugs.
+            // A log written before this convention existed should not fail
+            // `check` on its history; entries written from here on will.
+            let entries = read_entries(&root, &config)?;
+            let silent = entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.trailer(),
+                        cairns_core::entry::Trailer::Missing | cairns_core::entry::Trailer::Blank
+                    )
+                })
+                .count();
+            let raw = std::fs::read_to_string(&config_path)?;
+            if silent > 0 && !raw.contains("[check]") {
+                std::fs::write(
+                    &config_path,
+                    format!(
+                        "{}\n# {silent} entries predate the open-question line. Set this back to\n                         # \"required\" once they carry one - `cairns open` is only as complete as\n                         # the entries that answer it.\n[check]\nopen_questions = \"optional\"\n",
+                        raw.trim_end()
+                    ),
+                )?;
+                println!(
+                    "{silent} entries have no `**Still unknown:**` line - \
+                     check relaxed to optional in cairns.toml"
+                );
+            }
+
             let frozen = freeze_slugs(&root, &config)?;
             if frozen > 0 {
                 println!(

@@ -13,6 +13,8 @@ pub struct Config {
     pub site: Site,
     #[serde(default)]
     pub index: Index,
+    #[serde(default)]
+    pub check: Check,
     /// Reference pages, if the project keeps any. Absent by default: a worklog
     /// is useful on its own, and many projects have no docs tree to pair it
     /// with.
@@ -58,6 +60,39 @@ pub struct Site {
     /// can find out what the project is. Usually `README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+}
+
+/// What `check` insists on beyond the things that are always errors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Check {
+    /// Whether every entry must end with a `**Still unknown:**` line.
+    ///
+    /// Required by default. The log's most useful derived output is the list
+    /// of what the project does not yet know, and an entry that simply omits
+    /// the line drops out of it silently - a missing convention is not a
+    /// broken one, so nothing complains. Writing `nothing` is a deliberate
+    /// act; leaving it out is not.
+    ///
+    /// `init` writes `optional` when it adopts a log that already has entries
+    /// without the line, so that adopting cairns never fails on history.
+    #[serde(default)]
+    pub open_questions: Insistence,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Insistence {
+    #[default]
+    Required,
+    Optional,
+}
+
+impl Default for Check {
+    fn default() -> Self {
+        Check {
+            open_questions: Insistence::Required,
+        }
+    }
 }
 
 /// A tree of reference pages beside the log.

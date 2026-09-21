@@ -322,6 +322,20 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
             problems.push(format!("{}: should be named {expected}", entry.path));
         }
 
+        if config.check.open_questions == crate::config::Insistence::Required {
+            match entry.trailer() {
+                crate::entry::Trailer::Missing => problems.push(format!(
+                    "{}: has no `**Still unknown:**` line - write `nothing` to close it out",
+                    entry.path
+                )),
+                crate::entry::Trailer::Blank => problems.push(format!(
+                    "{}: `**Still unknown:**` is empty - write `nothing` to close it out",
+                    entry.path
+                )),
+                _ => {}
+            }
+        }
+
         for area in &entry.front.areas {
             if !config.knows_area(area) {
                 problems.push(format!("{}: unknown area {area:?}", entry.path));
@@ -397,7 +411,7 @@ mod tests {
     #[test]
     fn resolving_an_entry_that_asked_nothing_is_rejected() {
         let closed = entry(1, "", "Prose.\n\n**Still unknown:** nothing");
-        let answering = entry(2, "resolves: 1\n", "Prose.");
+        let answering = entry(2, "resolves: 1\n", "Prose.\n\n**Still unknown:** nothing");
         let found = problems(&config(), &[closed, answering]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("left no open question"), "{found:?}");
@@ -406,7 +420,11 @@ mod tests {
     #[test]
     fn resolving_a_question_that_was_asked_is_accepted_and_closes_it() {
         let asking = entry(1, "", "Prose.\n\n**Still unknown:** whether it works.");
-        let answering = entry(2, "resolves: 1\n", "It works.");
+        let answering = entry(
+            2,
+            "resolves: 1\n",
+            "It works.\n\n**Still unknown:** nothing",
+        );
         let entries = vec![asking, answering];
         assert!(problems(&config(), &entries).is_empty());
 
@@ -423,10 +441,77 @@ mod tests {
     #[test]
     fn a_resolves_pointing_forwards_or_nowhere_is_rejected() {
         let asking = entry(1, "", "Prose.\n\n**Still unknown:** whether it works.");
-        let wrong = entry(2, "resolves: 9\n", "Prose.");
+        let wrong = entry(2, "resolves: 9\n", "Prose.\n\n**Still unknown:** nothing");
         let found = problems(&config(), &[asking, wrong]);
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().any(|p| p.contains("does not exist")));
         assert!(found.iter().any(|p| p.contains("not an earlier entry")));
+    }
+}
+
+#[cfg(test)]
+mod trailer_tests {
+    use super::*;
+    use crate::config::Insistence;
+    use crate::{Entry, RawEntry};
+
+    fn config(insist: Insistence) -> Config {
+        let relax = if insist == Insistence::Optional {
+            "[check]\nopen_questions = \"optional\"\n"
+        } else {
+            ""
+        };
+        Config::parse(&format!(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n\
+             [[area]]\nname = \"spec\"\n{relax}"
+        ))
+        .unwrap()
+    }
+
+    fn entry(number: u32, body: &str) -> Entry {
+        let text = format!(
+            "---\nnumber: {number}\ntitle: T{number}\ndate: 2026-09-20\narea: spec\n---\n\n\
+             # {number}. T{number}\n\n{body}\n"
+        );
+        Entry::parse(&RawEntry {
+            path: format!("worklog/{number:04}-t{number}.md"),
+            bytes: text.into_bytes(),
+        })
+        .unwrap()
+    }
+
+    /// Hellbender lost twenty-six entries' worth of open questions by simply
+    /// not writing the line, and nothing complained: a missing convention is
+    /// not a broken one until something insists on it.
+    #[test]
+    fn an_entry_that_never_says_what_is_unknown_is_a_problem() {
+        let missing = entry(1, "Prose with no trailer.");
+        let found = problems(&config(Insistence::Required), &[missing]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("has no `**Still unknown:**`"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_blank_trailer_is_a_problem_too() {
+        let blank = entry(1, "Prose.\n\n**Still unknown:**");
+        let found = problems(&config(Insistence::Required), &[blank]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("is empty"), "{found:?}");
+    }
+
+    #[test]
+    fn nothing_is_the_deliberate_act_and_passes() {
+        let closed = entry(1, "Prose.\n\n**Still unknown:** nothing");
+        let open = entry(2, "Prose.\n\n**Still unknown:** whether it holds.");
+        assert!(problems(&config(Insistence::Required), &[closed, open]).is_empty());
+    }
+
+    #[test]
+    fn a_log_that_predates_the_convention_can_opt_out() {
+        let missing = entry(1, "Prose with no trailer.");
+        assert!(problems(&config(Insistence::Optional), &[missing]).is_empty());
     }
 }

@@ -89,25 +89,58 @@ impl Entry {
         first_sentence(&self.body)
     }
 
+    /// The state of an entry's open-question trailer.
+    ///
+    /// Three of these four are silent failures if nothing looks for them: an
+    /// entry with no trailer, and an entry whose trailer is blank, both read as
+    /// "nothing open" while meaning "nobody said". Hellbender lost twenty-six
+    /// entries' worth of open questions that way without a single complaint.
+    pub fn trailer(&self) -> Trailer {
+        let Some(start) = self
+            .body
+            .match_indices(STILL_UNKNOWN)
+            .map(|(at, _)| at)
+            .filter(|at| *at == 0 || self.body[..*at].ends_with('\n'))
+            .last()
+        else {
+            return Trailer::Missing;
+        };
+        let rest = &self.body[start + STILL_UNKNOWN.len()..];
+        let end = rest.find("\n\n").unwrap_or(rest.len());
+        let text = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+
+        if text.is_empty() {
+            Trailer::Blank
+        } else if text.trim_end_matches('.').eq_ignore_ascii_case("nothing") {
+            Trailer::Closed
+        } else {
+            Trailer::Open(text)
+        }
+    }
+
     /// What the entry says it still does not know, or `None` if it closed out.
     ///
     /// The trailer has to begin a line, and the last one wins, because an entry
     /// is perfectly entitled to mention the marker in its prose - entry 2 of
     /// this log does, and an unanchored search read that instead of the trailer.
     pub fn still_unknown(&self) -> Option<String> {
-        let start = self
-            .body
-            .match_indices(STILL_UNKNOWN)
-            .map(|(at, _)| at)
-            .filter(|at| *at == 0 || self.body[..*at].ends_with('\n'))
-            .last()?
-            + STILL_UNKNOWN.len();
-        let rest = &self.body[start..];
-        let end = rest.find("\n\n").unwrap_or(rest.len());
-        let text = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
-        let closed = text.trim_end_matches('.').eq_ignore_ascii_case("nothing");
-        (!text.is_empty() && !closed).then_some(text)
+        match self.trailer() {
+            Trailer::Open(text) => Some(text),
+            _ => None,
+        }
     }
+}
+
+/// What an entry said about what it did not know.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Trailer {
+    /// No `**Still unknown:**` line at all. Nobody said.
+    Missing,
+    /// The line is there and says nothing after it.
+    Blank,
+    /// `nothing` - the deliberate act of closing the entry out.
+    Closed,
+    Open(String),
 }
 
 impl FrontMatter {
