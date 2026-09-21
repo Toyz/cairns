@@ -5,7 +5,7 @@
 //! are. Every page is complete HTML with its own metadata, because the unit
 //! that gets shared is one entry, not the site.
 
-use cairns_core::log::{Log, LogEntry};
+use cairns_core::log::{DocPage, Log, LogEntry};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -78,18 +78,25 @@ pub fn plain_md(text: &str) -> String {
 /// entry is a directory named after its number and slug. Anything else
 /// relative is a file in the repository, so it points there.
 pub struct Links<'a> {
-    pub entries: &'a BTreeMap<u32, &'a LogEntry>,
-    /// The directory the entries live in. A relative link inside an entry is
-    /// relative to *that*, so `../docs/spec/entry.md` is `docs/spec/entry.md`
-    /// at the repository root - and saying so needs to know where it started.
-    pub entry_dir: &'a str,
-    pub repository: Option<&'a str>,
-    /// `None` renders entry links relative, for a page that sits beside them;
-    /// `Some(base)` renders them absolute, for the feed.
+    pub log: &'a Log,
+    /// The directory of the document being rendered. A relative link is
+    /// relative to *that*, which is the only way to know what `entry.md` means.
+    pub from_dir: &'a str,
+    /// The path back to the site root from the page being rendered.
+    pub rel: &'a str,
+    /// `Some(base)` renders site links absolute, for the feed, which has no
+    /// page to resolve a relative one against.
     pub base: Option<&'a str>,
 }
 
 impl Links<'_> {
+    fn site(&self, path: &str) -> String {
+        match self.base {
+            Some(base) => format!("{}/{path}", base.trim_end_matches('/')),
+            None => format!("{}{path}", self.rel),
+        }
+    }
+
     fn resolve(&self, url: &str) -> String {
         let untouched = url.is_empty()
             || url.starts_with('#')
@@ -105,25 +112,25 @@ impl Links<'_> {
             None => (url, String::new()),
         };
 
-        // `0004-the-write-path.md`, however it was reached.
-        let name = path.rsplit('/').next().unwrap_or(path);
-        if let Some(stem) = name.strip_suffix(".md")
-            && let Some((digits, _)) = stem.split_once('-')
-            && let Ok(number) = digits.parse::<u32>()
-            && let Some(entry) = self.entries.get(&number)
-        {
-            let target = format!("{}-{}", entry.number, entry.slug);
-            return match self.base {
-                Some(base) => format!("{}/{target}{fragment}", base.trim_end_matches('/')),
-                None => format!("../{target}/{fragment}"),
-            };
+        // Everything is decided on the repo-root path the link points at, so
+        // `entry.md`, `../spec/entry.md` and `docs/spec/entry.md` all land in
+        // the same place from wherever they were written.
+        let target = from_repo_root(self.from_dir, path);
+
+        if let Some(entry) = self.log.entries.iter().find(|entry| entry.path == target) {
+            return format!(
+                "{}{fragment}",
+                self.site(&format!("{}-{}/", entry.number, entry.slug))
+            );
+        }
+        if let Some(doc) = self.log.docs.iter().find(|doc| doc.path == target) {
+            return format!("{}{fragment}", self.site(&format!("docs/{}/", doc.slug)));
         }
 
-        match self.repository {
+        match self.log.project.repository.as_deref() {
             Some(repo) => format!(
-                "{}/blob/HEAD/{}{fragment}",
-                repo.trim_end_matches('/'),
-                from_repo_root(self.entry_dir, path)
+                "{}/blob/HEAD/{target}{fragment}",
+                repo.trim_end_matches('/')
             ),
             None => url.to_string(),
         }
@@ -157,9 +164,6 @@ fn entry_dir(log: &Log) -> &str {
         .map(|(dir, _)| dir)
         .unwrap_or("")
 }
-
-/// Where the contents list goes: after the dateline, before the prose.
-const CONTENTS_SLOT: &str = "<!--cairns:contents-->";
 
 /// One heading in an entry: its depth, its words, and the anchor it gets.
 pub struct Heading {
@@ -261,7 +265,12 @@ fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, Strin
 
 /// Markdown whose relative links point into a repository rather than at the
 /// site, which is where a README's `docs/spec/entry.md` actually lives.
-fn markdown_linked(text: &str, repository: Option<&str>) -> String {
+fn markdown_linked(text: &str, links: &Links<'_>) -> String {
+    markdown_with_headings(text, links).1
+}
+
+#[allow(dead_code)]
+fn unused_markdown_linked(text: &str, repository: Option<&str>) -> String {
     let Some(repo) = repository.map(|repo| repo.trim_end_matches('/').to_string()) else {
         return markdown(text);
     };
@@ -313,15 +322,10 @@ fn markdown_linked(text: &str, repository: Option<&str>) -> String {
 /// An entry's prose as HTML, for the feed, with every link absolute - a feed
 /// reader has no page to resolve a relative one against.
 pub fn body_html(log: &Log, entry: &LogEntry) -> String {
-    let by_number: BTreeMap<u32, &LogEntry> = log
-        .entries
-        .iter()
-        .map(|entry| (entry.number, entry))
-        .collect();
     let links = Links {
-        entries: &by_number,
-        entry_dir: entry_dir(log),
-        repository: log.project.repository.as_deref(),
+        log,
+        from_dir: entry_dir(log),
+        rel: "",
         base: Some(log.project.base_url.trim_end_matches('/')),
     };
     markdown_with_headings(prose(entry), &links).1
@@ -344,13 +348,53 @@ pub fn plain(entry: &LogEntry) -> String {
     out
 }
 
-/// The page shell. `rel` is the path back to the site root from this page, so
-/// one renderer serves the root pages and the entry pages alike.
-fn shell(log: &Log, title: &str, description: &str, url: &str, rel: &str, body: &str) -> String {
+/// The page shell: a sticky rail carrying the project's identity, its
+/// navigation and whatever the page wants beside it, and a content column that
+/// is the same width on every page.
+///
+/// `rel` is the path back to the site root, so one renderer serves the root
+/// pages and the pages nested under `docs/` alike.
+#[allow(clippy::too_many_arguments)]
+fn shell(
+    log: &Log,
+    title: &str,
+    description: &str,
+    url: &str,
+    rel: &str,
+    current: &str,
+    aside: &str,
+    contents: &str,
+    body: &str,
+) -> String {
     let base = log.project.base_url.trim_end_matches('/');
-    let mut out = String::new();
+    let here = |key: &str| {
+        if key == current {
+            " aria-current=\"page\""
+        } else {
+            ""
+        }
+    };
+
+    let mut nav = format!("<a href=\"{rel}\"{}>Entries</a>", here("entries"));
+    if !log.docs.is_empty() {
+        let _ = write!(
+            nav,
+            "<a href=\"{rel}docs/\"{}>{}</a>",
+            here("docs"),
+            escape(log.docs_label.as_deref().unwrap_or("Reference"))
+        );
+    }
     let _ = write!(
-        out,
+        nav,
+        "<a href=\"{rel}open/\"{}>Open questions</a>",
+        here("open")
+    );
+    if log.readme.is_some() {
+        let _ = write!(nav, "<a href=\"{rel}about/\"{}>About</a>", here("about"));
+    }
+    let _ = write!(nav, "<a href=\"{rel}feed.xml\">Feed</a>");
+
+    format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
@@ -369,15 +413,18 @@ fn shell(log: &Log, title: &str, description: &str, url: &str, rel: &str, body: 
 <link rel="stylesheet" href="{rel}style.css">
 </head>
 <body>
-<div class="wrap">
-<header class="masthead">
-<h1><a href="{rel}">{site}</a></h1>
-{tagline}<nav><a href="{rel}">Entries</a>{about}<a href="{rel}open/">Open questions</a><a href="{rel}feed.xml">Feed</a></nav>
-</header>
+<div class="shell">
+<aside class="rail">
+<div class="brand">
+<a class="brand-name" href="{rel}">{site}</a>
+{tagline}</div>
+<nav class="rail-nav">{nav}</nav>
+{aside}</aside>
+<main>
 {body}
-<footer>
-<p>Generated by <a href="https://github.com/Toyz/cairns">cairns</a>.</p>
-</footer>
+<footer><p>Generated by <a href="https://github.com/Toyz/cairns">cairns</a>.</p></footer>
+</main>
+<aside class="contents-rail">{contents}</aside>
 </div>
 </body>
 </html>
@@ -386,19 +433,17 @@ fn shell(log: &Log, title: &str, description: &str, url: &str, rel: &str, body: 
         description = escape(description),
         url = escape(url),
         site = escape(&log.project.name),
+        base = escape(base),
+        contents = contents,
         tagline = if log.project.description.is_empty() {
             String::new()
         } else {
-            format!("<p>{}</p>\n", escape(&log.project.description))
+            format!(
+                "<p class=\"brand-line\">{}</p>\n",
+                escape(&log.project.description)
+            )
         },
-        base = escape(base),
-        about = if log.readme.is_some() {
-            format!("<a href=\"{rel}about/\">About</a>")
-        } else {
-            String::new()
-        },
-    );
-    out
+    )
 }
 
 fn path_of(entry: &LogEntry) -> String {
@@ -408,59 +453,71 @@ fn path_of(entry: &LogEntry) -> String {
 /// The index: every entry, with the chips and the search box over it.
 pub fn home(log: &Log) -> String {
     let base = log.project.base_url.trim_end_matches('/');
-    let mut body = String::new();
 
-    body.push_str("<div class=\"controls\">\n");
-    let _ = writeln!(
-        body,
-        "<input type=\"search\" id=\"q\" placeholder=\"Search {} entries\" \
-         autocomplete=\"off\" spellcheck=\"false\">",
-        log.entries.len()
-    );
-    // Newest first is what someone checking back wants, and it is the order the
-    // page ships in so it holds with scripting off. Oldest first is for reading
-    // the thing through, which is the other half of why anyone opens a worklog.
-    body.push_str(
-        "<div class=\"sort\" role=\"group\" aria-label=\"Order\">\n\
-         <button data-sort=\"new\" aria-pressed=\"true\">Newest</button>\n\
-         <button data-sort=\"old\" aria-pressed=\"false\">Oldest</button>\n\
-         </div>\n</div>\n<div class=\"chips\">\n",
-    );
+    // The filters live in the rail rather than above the list: they are
+    // navigation, they are the same on every visit, and stacking them over the
+    // entries pushed the first one off the fold.
+    let mut chips = String::from("<div class=\"filters\">\n<p class=\"rail-label\">Areas</p>\n");
     for area in log.areas.iter().filter(|area| area.count > 0) {
         let _ = writeln!(
-            body,
+            chips,
             "<button class=\"chip\" data-area=\"{name}\" aria-pressed=\"false\" \
-             title=\"{about}\">{name}<span class=\"count\">{count}</span></button>",
+             title=\"{about}\"><span>{name}</span><span class=\"count\">{count}</span></button>",
             name = escape(&area.name),
             about = escape(&area.about),
             count = area.count
         );
     }
-    body.push_str("</div>\n<p id=\"status\"></p>\n<ul class=\"entries\" id=\"entries\">\n");
+    chips.push_str("</div>\n");
+
+    let mut body = String::from("<div class=\"toolbar\">\n<div class=\"search\">\n");
+    body.push_str(
+        "<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\">\
+         <circle cx=\"7\" cy=\"7\" r=\"4.5\" fill=\"none\" stroke=\"currentColor\" \
+         stroke-width=\"1.5\"/><path d=\"M10.5 10.5 L14 14\" stroke=\"currentColor\" \
+         stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg>\n",
+    );
+    let _ = writeln!(
+        body,
+        "<input type=\"search\" id=\"q\" placeholder=\"Search {} entries\" \
+         autocomplete=\"off\" spellcheck=\"false\">\n</div>",
+        log.entries.len()
+    );
+    // Newest first is what someone checking back wants, and it is the order the
+    // page ships in so it holds with scripting off.
+    body.push_str(
+        "<div class=\"sort\" role=\"group\" aria-label=\"Order\">\n\
+         <button data-sort=\"new\" aria-pressed=\"true\">Newest</button>\n\
+         <button data-sort=\"old\" aria-pressed=\"false\">Oldest</button>\n\
+         </div>\n</div>\n<p id=\"status\"></p>\n<ul class=\"entries\" id=\"entries\">\n",
+    );
 
     for entry in log.entries.iter().rev() {
         let _ = writeln!(
             body,
             "<li data-n=\"{n}\" data-areas=\"{slugs}\">\n\
-             <p class=\"meta\"><span class=\"no\">{n}</span>\
-             <time datetime=\"{date}\">{date}</time>\
-             <span class=\"areas\">{areas}</span></p>\n\
-             <h2><a href=\"{path}/\">{title}</a></h2>",
+             <a class=\"row\" href=\"{path}/\">\n\
+             <span class=\"no\">{n}</span>\n<span class=\"row-main\">\n\
+             <span class=\"row-title\">{title}</span>",
             n = entry.number,
             slugs = escape(&entry.areas.join(" ")),
-            date = entry.date,
-            areas = escape(&entry.areas.join(", ")),
             path = escape(&path_of(entry)),
             title = escape(&entry.title)
         );
         if let Some(summary) = &entry.summary {
             let _ = writeln!(
                 body,
-                "<p class=\"summary\">{}</p>",
+                "<span class=\"summary\">{}</span>",
                 escape(&plain_md(summary))
             );
         }
-        body.push_str("</li>\n");
+        let _ = writeln!(
+            body,
+            "<span class=\"meta\"><time datetime=\"{date}\">{date}</time>\
+             <span class=\"areas\">{areas}</span></span>\n</span>\n</a>\n</li>",
+            date = entry.date,
+            areas = escape(&entry.areas.join(" \u{00b7} "))
+        );
     }
 
     body.push_str("</ul>\n<script src=\"search.js\" defer></script>\n");
@@ -470,7 +527,17 @@ pub fn home(log: &Log) -> String {
     } else {
         plain_md(&log.project.description)
     };
-    shell(log, &log.project.name, &description, base, "./", &body)
+    shell(
+        log,
+        &log.project.name,
+        &description,
+        base,
+        "./",
+        "entries",
+        &chips,
+        "",
+        &body,
+    )
 }
 
 /// One entry, with its corrections, its open question, and its neighbours.
@@ -478,6 +545,7 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     let this = &log.entries[at];
     let mut body = String::from("<article>\n");
 
+    let _ = writeln!(body, "<p class=\"entry-number\">Entry {}</p>", this.number);
     let _ = writeln!(body, "<h1>{}</h1>", escape(&this.title));
     let _ = write!(
         body,
@@ -505,7 +573,11 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         ),
         None => format!("entry {number}"),
     };
-    if !this.superseded_by.is_empty() || !this.supersedes.is_empty() || !this.resolves.is_empty() {
+    if !this.superseded_by.is_empty()
+        || !this.supersedes.is_empty()
+        || !this.resolves.is_empty()
+        || !this.documented_by.is_empty()
+    {
         body.push_str("<div class=\"notice\">\n");
         if !this.superseded_by.is_empty() {
             let who: Vec<String> = this.superseded_by.iter().map(|n| link(*n)).collect();
@@ -520,6 +592,17 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
             let who: Vec<String> = this.supersedes.iter().map(|n| link(*n)).collect();
             let _ = writeln!(body, "<p>This entry revisits {}.</p>", who.join(", "));
         }
+        if !this.documented_by.is_empty() {
+            let _ = writeln!(
+                body,
+                "<p>Documented in {}.</p>",
+                this.documented_by
+                    .iter()
+                    .map(|title| escape(title))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         if !this.resolves.is_empty() {
             let who: Vec<String> = this.resolves.iter().map(|n| link(*n)).collect();
             let _ = writeln!(
@@ -532,13 +615,12 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     }
 
     let links = Links {
-        entries: by_number,
-        entry_dir: entry_dir(log),
-        repository: log.project.repository.as_deref(),
+        log,
+        from_dir: entry_dir(log),
+        rel: "../",
         base: None,
     };
     let (headings, prose_html) = markdown_with_headings(prose(this), &links);
-    body.push_str(CONTENTS_SLOT);
     body.push_str(&prose_html);
 
     if let Some(unknown) = &this.still_unknown {
@@ -595,11 +677,19 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         toc.push_str("</ol>\n</nav>\n");
         toc
     };
-    let body = body.replace(CONTENTS_SLOT, &contents);
-
     let description = plain_md(this.summary.as_deref().unwrap_or(&this.title));
     let title = format!("{}. {}", this.number, this.title);
-    shell(log, &title, &description, &this.url, "../", &body)
+    shell(
+        log,
+        &title,
+        &description,
+        &this.url,
+        "../",
+        "entries",
+        "",
+        &contents,
+        &body,
+    )
 }
 
 /// Everything the log has not closed out, in one place.
@@ -661,6 +751,9 @@ pub fn open_questions(log: &Log) -> String {
         "What this log has not closed out.",
         &format!("{base}/open/"),
         "../",
+        "open",
+        "",
+        "",
         &body,
     )
 }
@@ -679,7 +772,15 @@ pub fn about(log: &Log) -> String {
 
     let body = format!(
         "<article>\n<h1>About</h1>\n{}</article>\n",
-        markdown_linked(body_md, log.project.repository.as_deref())
+        markdown_linked(
+            body_md,
+            &Links {
+                log,
+                from_dir: "",
+                rel: "../",
+                base: None
+            }
+        )
     );
     shell(
         log,
@@ -691,6 +792,288 @@ pub fn about(log: &Log) -> String {
         },
         &format!("{base}/about/"),
         "../",
+        "about",
+        "",
+        "",
+        &body,
+    )
+}
+
+/// The reference tree, for the rail: folders, then the pages inside them.
+///
+/// Navigation for a docs tree belongs beside the page, not only on an index
+/// somebody has to go back to. `here` is the slug of the page being rendered,
+/// so it can mark itself.
+pub fn docs_tree(log: &Log, rel: &str, here: &str) -> String {
+    let label = log.docs_label.as_deref().unwrap_or("Reference");
+    let mut out = format!(
+        "<div class=\"tree\">\n<p class=\"rail-label\">{}</p>\n",
+        escape(label)
+    );
+    out.push_str(&branch(log, rel, here, ""));
+    out.push_str("</div>\n");
+    out
+}
+
+fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
+    let pages: Vec<&DocPage> = log
+        .docs
+        .iter()
+        .filter(|doc| doc.section == within && !doc.is_index)
+        .collect();
+    let folders: Vec<&DocPage> = log
+        .docs
+        .iter()
+        .filter(|doc| doc.section == within && doc.is_index)
+        .collect();
+    if pages.is_empty() && folders.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("<ul>\n");
+    let link = |doc: &DocPage| {
+        format!(
+            "<a href=\"{rel}docs/{slug}/\"{current}>{title}</a>",
+            slug = escape(&doc.slug),
+            current = if doc.slug == here {
+                " aria-current=\"page\""
+            } else {
+                ""
+            },
+            title = escape(&doc.title)
+        )
+    };
+    for doc in pages {
+        let _ = writeln!(out, "<li>{}</li>", link(doc));
+    }
+    for folder in folders {
+        let _ = writeln!(out, "<li class=\"folder\">{}", link(folder));
+        out.push_str(&branch(log, rel, here, &folder.slug));
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
+    out
+}
+
+/// The reference index: sections as headings, pages as the same list the
+/// entries use. A directory's own page is its heading, not an item beside the
+/// things it introduces.
+pub fn docs_index(log: &Log) -> String {
+    let base = log.project.base_url.trim_end_matches('/');
+    let label = log.docs_label.as_deref().unwrap_or("Reference");
+
+    let mut body = format!("<article>\n<h1>{}</h1>\n", escape(label));
+    let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
+    let _ = writeln!(
+        body,
+        "<p class=\"lead\">{pages} pages: what is true, flatly. The log says how \
+         it was found out.</p>"
+    );
+    body.push_str(&sections(log, "", ""));
+    body.push_str("</article>\n");
+
+    shell(
+        log,
+        &format!("{label} - {}", log.project.name),
+        "What is true, flatly.",
+        &format!("{base}/docs/"),
+        "../",
+        "docs",
+        &docs_tree(log, "../", ""),
+        "",
+        &body,
+    )
+}
+
+/// The pages of one section, and then each section below it.
+///
+/// `within` is the section being listed; `rel` is the path from the page doing
+/// the listing back to the docs root.
+fn sections(log: &Log, within: &str, rel: &str) -> String {
+    let mut out = String::new();
+
+    let here: Vec<&DocPage> = log
+        .docs
+        .iter()
+        .filter(|doc| !doc.is_index && doc.section == within)
+        .collect();
+    if !here.is_empty() {
+        out.push_str("<ul class=\"entries\">\n");
+        for doc in here {
+            out.push_str(&doc_row(doc, rel));
+        }
+        out.push_str("</ul>\n");
+    }
+
+    for index in log
+        .docs
+        .iter()
+        .filter(|doc| doc.is_index && doc.section == within)
+    {
+        let _ = writeln!(
+            out,
+            "<h2 class=\"section\"><a href=\"{rel}{}/\">{}</a></h2>",
+            escape(&index.slug),
+            escape(&index.title)
+        );
+        let inside: Vec<&DocPage> = log
+            .docs
+            .iter()
+            .filter(|doc| !doc.is_index && doc.section == index.slug)
+            .collect();
+        if inside.is_empty() {
+            continue;
+        }
+        out.push_str("<ul class=\"entries\">\n");
+        for doc in inside {
+            out.push_str(&doc_row(doc, rel));
+        }
+        out.push_str("</ul>\n");
+    }
+    out
+}
+
+fn doc_row(doc: &DocPage, rel: &str) -> String {
+    let mut row = String::new();
+    let _ = writeln!(
+        row,
+        "<li>\n<p class=\"meta\">{status}{cites}</p>\n\
+         <h3><a href=\"{rel}{slug}/\">{title}</a></h3>",
+        status = doc
+            .status
+            .map(|status| format!(
+                "<span class=\"status status--{0}\">{0}</span>",
+                status.name()
+            ))
+            .unwrap_or_default(),
+        cites = if doc.worklog.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<span>from {}</span>",
+                doc.worklog
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+        slug = escape(&doc.slug),
+        title = escape(&doc.title)
+    );
+    if let Some(summary) = first_sentence_of(&doc.body) {
+        let _ = writeln!(
+            row,
+            "<p class=\"summary\">{}</p>",
+            escape(&plain_md(&summary))
+        );
+    }
+    row.push_str("</li>\n");
+    row
+}
+
+/// The first sentence of a page, for the index blurb.
+fn first_sentence_of(body: &str) -> Option<String> {
+    let prose = body
+        .lines()
+        .skip_while(|line| line.starts_with('#') || line.trim().is_empty())
+        .take_while(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let prose = prose.trim();
+    if prose.is_empty() {
+        return None;
+    }
+    Some(match prose.find(". ") {
+        Some(stop) => prose[..=stop].trim().to_string(),
+        None => prose.trim_end_matches('.').to_string() + ".",
+    })
+}
+
+/// One reference page. The dateline is the entry page's dateline.
+pub fn doc_page(log: &Log, doc: &DocPage) -> String {
+    let depth = doc.slug.matches('/').count() + 2;
+    let rel = "../".repeat(depth);
+    let by_number: BTreeMap<u32, &LogEntry> = log
+        .entries
+        .iter()
+        .map(|entry| (entry.number, entry))
+        .collect();
+
+    let mut body = String::from("<article>\n");
+    let _ = writeln!(body, "<h1>{}</h1>", escape(&doc.title));
+
+    let _ = write!(body, "<p class=\"dateline\">");
+    if !doc.section.is_empty() {
+        let _ = write!(body, "<span>{}</span>", escape(&doc.section));
+    }
+    if let Some(status) = doc.status {
+        let _ = write!(
+            body,
+            "<span class=\"status status--{0}\">{0}</span>",
+            status.name()
+        );
+    }
+    // The edge back to the evidence, which is the point of keeping both.
+    if !doc.worklog.is_empty() {
+        // Bare blue numbers read as nothing. They are the same pills the areas
+        // use, labelled, so "from entry 6" is what the reader sees.
+        body.push_str("<span class=\"from\">from</span>");
+        for number in &doc.worklog {
+            match by_number.get(number) {
+                Some(entry) => {
+                    let _ = write!(
+                        body,
+                        "<a class=\"chip\" href=\"{rel}{}-{}/\" title=\"{}\">entry {number}</a>",
+                        entry.number,
+                        escape(&entry.slug),
+                        escape(&entry.title)
+                    );
+                }
+                None => {
+                    let _ = write!(body, "<span class=\"chip\">entry {number}</span>");
+                }
+            }
+        }
+    }
+    body.push_str("</p>\n");
+
+    let from_dir = doc.path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let links = Links {
+        log,
+        from_dir,
+        rel: &rel,
+        base: None,
+    };
+    let stripped = match doc.body.trim_start().strip_prefix("# ") {
+        Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
+        None => doc.body.as_str(),
+    };
+    let (_, html) = markdown_with_headings(stripped, &links);
+    body.push_str(&html);
+
+    if doc.is_index {
+        let inside = sections(
+            log,
+            &doc.slug,
+            &"../".repeat(doc.slug.matches('/').count() + 1),
+        );
+        if !inside.is_empty() {
+            body.push_str("<h2>Pages</h2>\n");
+            body.push_str(&inside);
+        }
+    }
+    body.push_str("</article>\n");
+
+    shell(
+        log,
+        &format!("{} - {}", doc.title, log.project.name),
+        &doc.title,
+        &doc.url,
+        &rel,
+        "docs",
+        &docs_tree(log, &rel, &doc.slug),
+        "",
         &body,
     )
 }

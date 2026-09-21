@@ -10,6 +10,12 @@ repository  = "https://github.com/Toyz/cairns"
 base_url = "https://toyz.github.io/cairns/"
 readme   = "README.md"
 
+# Reference pages beside the log. Opt-in: remove this section and the site has
+# no Reference tab.
+[docs]
+dir   = "docs"
+label = "Reference"
+
 [[area]]
 name  = "spec"
 about = "the format itself - entries, config, log.json, publishing"

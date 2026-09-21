@@ -52,7 +52,7 @@ impl Entry {
     pub fn parse(raw: &RawEntry) -> Result<Self> {
         let text =
             std::str::from_utf8(&raw.bytes).map_err(|_| Error::entry(&raw.path, "not UTF-8"))?;
-        let (front_text, body) = split(text).ok_or_else(|| {
+        let (front_text, body) = split_front_matter(text).ok_or_else(|| {
             Error::entry(&raw.path, "no front matter - a file must open with `---`")
         })?;
         let front =
@@ -117,16 +117,7 @@ impl FrontMatter {
     /// have exactly one reading, which is worth more here than the convenience
     /// of nesting nobody needs.
     pub fn parse(text: &str) -> std::result::Result<Self, String> {
-        let mut fields: BTreeMap<String, String> = BTreeMap::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let (key, value) = line
-                .split_once(':')
-                .ok_or_else(|| format!("front matter line {line:?} has no `key: value`"))?;
-            fields.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
-        }
+        let mut fields = fields(text)?;
 
         let take = |fields: &mut BTreeMap<String, String>, key: &str| fields.remove(key);
         let need = |fields: &mut BTreeMap<String, String>, key: &str| {
@@ -180,7 +171,23 @@ impl FrontMatter {
 }
 
 /// Split `---\n...\n---\n` off the front of a file.
-fn split(text: &str) -> Option<(&str, &str)> {
+/// The strict `key: value` subset, as one map. Shared with reference pages,
+/// which use the same front matter with different keys in it.
+pub fn fields(text: &str) -> std::result::Result<BTreeMap<String, String>, String> {
+    let mut fields: BTreeMap<String, String> = BTreeMap::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (key, value) = line
+            .split_once(':')
+            .ok_or_else(|| format!("front matter line {line:?} has no `key: value`"))?;
+        fields.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+    Ok(fields)
+}
+
+pub fn split_front_matter(text: &str) -> Option<(&str, &str)> {
     let rest = text.strip_prefix("---\n")?;
     let end = rest.find("\n---")?;
     let after = rest[end + 4..]
@@ -237,10 +244,16 @@ fn first_sentence(body: &str) -> Option<String> {
     if prose.is_empty() {
         return None;
     }
-    match prose.find(". ") {
-        Some(stop) => Some(prose[..=stop].trim().to_string()),
-        None => Some(prose.trim_end_matches('.').to_string() + "."),
+    if let Some(stop) = prose.find(". ") {
+        return Some(prose[..=stop].trim().to_string());
     }
+    // One sentence with no ". " in it. It may already end in a full stop that
+    // trailing emphasis hides - `a wall.*` - and appending another gives `..`.
+    let bare = prose.trim_end_matches(['*', '_', '`', ')', ']']);
+    if bare.ends_with(['.', '!', '?']) {
+        return Some(prose.to_string());
+    }
+    Some(format!("{prose}."))
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -339,5 +352,38 @@ mod tests {
     fn summary_falls_back_to_the_first_sentence() {
         let parsed = entry("# 1. A title\n\nThe first sentence. The second one.\n");
         assert_eq!(parsed.summary().as_deref(), Some("The first sentence."));
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    fn summary(body: &str) -> Option<String> {
+        let text = format!(
+            "---\nnumber: 1\ntitle: t\ndate: 2026-09-20\narea: spec\n---\n\n# 1. t\n\n{body}\n"
+        );
+        Entry::parse(&RawEntry {
+            path: "worklog/0001-t.md".into(),
+            bytes: text.into_bytes(),
+        })
+        .unwrap()
+        .summary()
+    }
+
+    #[test]
+    fn a_sentence_ending_under_emphasis_is_not_given_a_second_full_stop() {
+        assert_eq!(
+            summary("He said *throwing shit at a wall.*").as_deref(),
+            Some("He said *throwing shit at a wall.*")
+        );
+        assert_eq!(
+            summary("No punctuation here").as_deref(),
+            Some("No punctuation here.")
+        );
+        assert_eq!(
+            summary("First one. Second one.").as_deref(),
+            Some("First one.")
+        );
     }
 }

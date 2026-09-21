@@ -1,6 +1,7 @@
 ---
 title: cairns.toml
-status: draft
+status: solid
+worklog: 1
 spec_version: 1
 ---
 
@@ -27,6 +28,10 @@ index   = "WORKLOG.md"
 base_url = "https://toyz.github.io/hellbender/"
 theme    = "default"
 readme   = "README.md"
+
+[docs]
+dir   = "docs"
+label = "Reference"
 
 [[area]]
 name  = "format"
@@ -74,6 +79,38 @@ without one tells a visitor what was found out but never what the project *is*.
 Its relative links are rewritten to point into `project.repository`, since a
 link to `docs/spec/entry.md` means a file in the repo and there is no such page
 on the site. Without a `repository` they are left alone, and will not resolve.
+
+## `[index]`
+
+One optional key, `header`, replacing the generated opening prose of
+`WORKLOG.md`. Everything else in that file is derived, which is why it is never
+hand-edited.
+
+## `[docs]`
+
+Reference pages beside the log, and entirely optional - a worklog is useful on
+its own, and most projects have no docs tree to pair with one.
+
+```toml
+[docs]
+dir   = "docs"
+label = "Reference"
+```
+
+The tree is walked recursively. A page's front matter is the same strict subset
+an entry uses, with different keys: `title`, an optional
+`status` of `solid`, `partial` or `guess`, and `worklog`, a comma-separated list
+of the entry numbers that established it.
+
+`worklog` is the edge that makes keeping both worthwhile. The page states what
+is true; the entries say how that was found out. It is rendered in both
+directions - a page links to its evidence, and those entries say which pages
+rest on them - and `check` rejects a page citing an entry that does not exist.
+
+A `README.md` or `index.md` **is its directory**, not a page inside it.
+`docs/spec/README.md` is served at `/docs/spec/` and heads the section, with the
+rest of that directory listed beneath it. Listing it as a peer of the pages it
+introduces would be backwards.
 
 ## `[[area]]`
 

@@ -1,6 +1,7 @@
 ---
 title: Publishing
-status: draft
+status: partial
+worklog: 1, 6, 8
 spec_version: 1
 ---
 

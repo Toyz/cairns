@@ -27,6 +27,37 @@ pub struct Log {
     /// site is built from - and so an ingest gets it too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+    /// Reference pages, if the project keeps any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docs: Vec<DocPage>,
+    /// What the site calls them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs_label: Option<String>,
+}
+
+/// One reference page in the canonical document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocPage {
+    /// Its path under the docs root, without the extension: `formats/pod`.
+    pub slug: String,
+    pub url: String,
+    pub path: String,
+    pub title: String,
+    /// The grouping the index uses, taken from the tree the author made.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub section: String,
+    /// True when this page *is* a directory rather than a page inside one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_index: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<crate::doc::Status>,
+    /// The entries that established this page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worklog: Vec<u32>,
+    pub body: String,
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +106,9 @@ pub struct LogEntry {
     /// is non-empty the question is closed and is not in `open_questions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved_by: Vec<u32>,
+    /// Derived: reference pages that name this entry as their evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documented_by: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_unknown: Option<String>,
     /// Markdown, not HTML. A newer renderer can re-render an old log, and a
@@ -93,7 +127,19 @@ pub struct OpenQuestion {
 
 impl Log {
     /// Build the canonical document. `entries` may arrive in any order.
-    pub fn build(config: &Config, mut entries: Vec<Entry>, generated: Option<String>) -> Log {
+    pub fn build(config: &Config, entries: Vec<Entry>, generated: Option<String>) -> Log {
+        Log::build_with(config, entries, Vec::new(), generated)
+    }
+
+    /// Build the document from the entries and the reference pages together,
+    /// so the edges between them - which page cites which entry - are derived
+    /// once, here, and never recomputed by anything downstream.
+    pub fn build_with(
+        config: &Config,
+        mut entries: Vec<Entry>,
+        docs: Vec<crate::Doc>,
+        generated: Option<String>,
+    ) -> Log {
         entries.sort_by_key(|entry| entry.front.number);
 
         let mut corrected: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -111,6 +157,41 @@ impl Log {
         }
 
         let base = config.site.base_url.trim_end_matches('/');
+        let docs_root = config
+            .docs
+            .as_ref()
+            .map(|docs| docs.dir.as_str())
+            .unwrap_or("docs");
+
+        // A page names the entries it rests on; an entry learns which pages
+        // rest on it by inverting that.
+        let mut cited: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+        let pages: Vec<DocPage> = docs
+            .iter()
+            .map(|doc| {
+                let slug = doc.slug(docs_root);
+                for number in &doc.worklog {
+                    cited.entry(*number).or_default().push(doc.title.clone());
+                }
+                DocPage {
+                    url: format!("{base}/docs/{slug}"),
+                    slug,
+                    path: doc.path.clone(),
+                    title: doc.title.clone(),
+                    section: doc.section(docs_root),
+                    is_index: doc.is_index(),
+                    status: doc.status,
+                    worklog: doc.worklog.clone(),
+                    body: doc.body.clone(),
+                    content_hash: doc.content_hash.clone(),
+                    extra: doc
+                        .extra
+                        .iter()
+                        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                        .collect(),
+                }
+            })
+            .collect();
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
         let mut open_questions = Vec::new();
         let mut built = Vec::with_capacity(entries.len());
@@ -152,6 +233,7 @@ impl Log {
                     .unwrap_or_default(),
                 resolves: entry.front.resolves.clone(),
                 resolved_by,
+                documented_by: cited.get(&entry.front.number).cloned().unwrap_or_default(),
                 still_unknown,
                 body: entry.body.clone(),
                 content_hash: entry.content_hash.clone(),
@@ -191,8 +273,30 @@ impl Log {
             entries: built,
             open_questions,
             readme: None,
+            docs: pages,
+            docs_label: config.docs.as_ref().map(|docs| docs.label.clone()),
         }
     }
+}
+
+/// What `cairns check` reports about the reference pages.
+pub fn doc_problems(entries: &[Entry], docs: &[crate::Doc]) -> Vec<String> {
+    let numbers: Vec<u32> = entries.iter().map(|entry| entry.front.number).collect();
+    let mut problems = Vec::new();
+    for doc in docs {
+        if doc.title.trim().is_empty() {
+            problems.push(format!("{}: has no title", doc.path));
+        }
+        for number in &doc.worklog {
+            if !numbers.contains(number) {
+                problems.push(format!(
+                    "{}: cites worklog {number}, which does not exist",
+                    doc.path
+                ));
+            }
+        }
+    }
+    problems
 }
 
 /// Everything `cairns check` reports, in the order a reader would want it.

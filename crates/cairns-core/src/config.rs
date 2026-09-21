@@ -13,6 +13,11 @@ pub struct Config {
     pub site: Site,
     #[serde(default)]
     pub index: Index,
+    /// Reference pages, if the project keeps any. Absent by default: a worklog
+    /// is useful on its own, and many projects have no docs tree to pair it
+    /// with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<Docs>,
     /// Ordered, because the order is how areas are presented everywhere.
     #[serde(default, rename = "area")]
     pub areas: Vec<Area>,
@@ -53,6 +58,20 @@ pub struct Site {
     /// can find out what the project is. Usually `README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+}
+
+/// A tree of reference pages beside the log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Docs {
+    pub dir: String,
+    /// What the site calls them. "Reference" reads better than "Docs" beside
+    /// "Entries", but it is the project's word to choose.
+    #[serde(default = "docs_label")]
+    pub label: String,
+}
+
+fn docs_label() -> String {
+    "Reference".into()
 }
 
 /// The generated index. Only its opening prose is a project's to write; the

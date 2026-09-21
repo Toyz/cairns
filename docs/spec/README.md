@@ -1,6 +1,7 @@
 ---
 title: The cairns spec
-status: draft
+status: solid
+worklog: 1
 spec_version: 1
 ---
 

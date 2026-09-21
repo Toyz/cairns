@@ -11,6 +11,7 @@
 
 pub mod config;
 pub mod date;
+pub mod doc;
 pub mod entry;
 pub mod error;
 pub mod log;
@@ -21,6 +22,7 @@ pub const SPEC_VERSION: u32 = 1;
 
 pub use config::Config;
 pub use date::{Date, rfc3339};
+pub use doc::{Doc, Status};
 pub use entry::{Entry, FrontMatter};
 pub use error::{Error, Result};
 pub use log::Log;

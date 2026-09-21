@@ -120,7 +120,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Check => {
             let (root, config) = load()?;
             let entries = read_entries(&root, &config)?;
+            let docs = read_docs(&root, &config)?;
             let mut problems = log::problems(&config, &entries);
+            problems.extend(log::doc_problems(&entries, &docs));
 
             // A stale index is the most common way a worklog starts lying, and
             // the cheapest to catch: render it again and compare.
@@ -509,7 +511,12 @@ fn build_log(
     config: &Config,
     generated: Option<String>,
 ) -> Result<Log, Box<dyn std::error::Error>> {
-    let mut built = Log::build(config, read_entries(root, config)?, generated);
+    let mut built = Log::build_with(
+        config,
+        read_entries(root, config)?,
+        read_docs(root, config)?,
+        generated,
+    );
     if let Some(path) = &config.site.readme {
         match std::fs::read_to_string(root.join(path)) {
             Ok(text) => built.readme = Some(text),
@@ -519,6 +526,25 @@ fn build_log(
         }
     }
     Ok(built)
+}
+
+/// The reference pages, if the project keeps any.
+fn read_docs(
+    root: &Path,
+    config: &Config,
+) -> Result<Vec<cairns_core::Doc>, Box<dyn std::error::Error>> {
+    let Some(docs) = &config.docs else {
+        return Ok(Vec::new());
+    };
+    if !root.join(&docs.dir).is_dir() {
+        eprintln!("cairns: {} is not a directory", docs.dir);
+        return Ok(Vec::new());
+    }
+    let mut pages = Vec::new();
+    for raw in FsSource::recursive(root, &docs.dir).entries()? {
+        pages.push(cairns_core::Doc::parse(&raw)?);
+    }
+    Ok(pages)
 }
 
 fn read_entries(root: &Path, config: &Config) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {

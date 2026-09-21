@@ -28,6 +28,8 @@ mod fs {
     pub struct FsSource {
         root: PathBuf,
         dir: String,
+        /// Entries are flat; a docs tree is not.
+        deep: bool,
     }
 
     impl FsSource {
@@ -35,24 +37,50 @@ mod fs {
             FsSource {
                 root: root.as_ref().to_path_buf(),
                 dir: dir.into(),
+                deep: false,
             }
+        }
+
+        /// Walk sub-directories too, for a tree of reference pages.
+        pub fn recursive(root: impl AsRef<Path>, dir: impl Into<String>) -> Self {
+            FsSource {
+                deep: true,
+                ..FsSource::new(root, dir)
+            }
+        }
+    }
+
+    impl FsSource {
+        fn walk(&self, dir: &Path, prefix: &str, found: &mut Vec<RawEntry>) -> Result<()> {
+            for item in std::fs::read_dir(dir)? {
+                let path = item?.path();
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if path.is_dir() {
+                    if self.deep && !name.starts_with('.') {
+                        self.walk(&path, &format!("{prefix}/{name}"), found)?;
+                    }
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "md") {
+                    continue;
+                }
+                found.push(RawEntry {
+                    path: format!("{prefix}/{name}"),
+                    bytes: std::fs::read(&path)?,
+                });
+            }
+            Ok(())
         }
     }
 
     impl Source for FsSource {
         fn entries(&self) -> Result<Vec<RawEntry>> {
             let mut found = Vec::new();
-            for item in std::fs::read_dir(self.root.join(&self.dir))? {
-                let path = item?.path();
-                if path.extension().is_none_or(|ext| ext != "md") {
-                    continue;
-                }
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                found.push(RawEntry {
-                    path: format!("{}/{name}", self.dir),
-                    bytes: std::fs::read(&path)?,
-                });
-            }
+            self.walk(&self.root.join(&self.dir), &self.dir, &mut found)?;
             found.sort_by(|a, b| a.path.cmp(&b.path));
             Ok(found)
         }

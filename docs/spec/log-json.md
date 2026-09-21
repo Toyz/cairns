@@ -1,6 +1,7 @@
 ---
 title: log.json
-status: draft
+status: solid
+worklog: 1, 6
 spec_version: 1
 ---
 

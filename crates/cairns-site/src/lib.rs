@@ -58,6 +58,15 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     if log.readme.is_some() {
         rendered.push("about/index.html", html::about(log));
     }
+    if !log.docs.is_empty() {
+        rendered.push("docs/index.html", html::docs_index(log));
+        for doc in &log.docs {
+            rendered.push(
+                format!("docs/{}/index.html", doc.slug),
+                html::doc_page(log, doc),
+            );
+        }
+    }
     rendered.push("feed.xml", feed::atom(log));
 
     let by_number = log
@@ -223,8 +232,10 @@ mod tests {
                 .count(),
             1
         );
-        // One heading for the site, one for the entry - none from the body.
-        assert_eq!(page.matches("<h1>").count(), 2);
+        // Exactly one h1 per page, and it is the entry's title: the site name
+        // in the rail is a link, not a competing heading.
+        assert_eq!(page.matches("<h1>").count(), 1);
+        assert!(page.contains("<h1>Title 1</h1>"), "{page}");
         assert!(page.contains("class=\"unknown\""));
         assert!(page.contains("whether it works."));
         assert!(

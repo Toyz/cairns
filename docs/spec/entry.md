@@ -1,6 +1,7 @@
 ---
 title: The entry
-status: draft
+status: solid
+worklog: 1, 10
 spec_version: 1
 ---
 
