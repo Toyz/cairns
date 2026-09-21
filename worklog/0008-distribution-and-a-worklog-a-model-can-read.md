@@ -60,6 +60,25 @@ tampered archive   -> "checksum mismatch", exit 1, nothing installed
 missing from sums  -> "not listed in SHA256SUMS", exit 1
 ```
 
+### The tag is the version
+
+`Cargo.toml` says `0.0.0-dev` and never says anything else. Pushing `v0.2.0`
+makes `scripts/version-from-tag.sh` rewrite the workspace version in the
+runner's working tree, and nothing is committed - so there is no file to
+remember to bump, and no way for a tag and a manifest to disagree about what a
+release is.
+
+The rewrite replaces the *exact* current version string, which appears as the
+workspace version and as the pin on each path dependency and nowhere else, so
+`serde = { version = "1" }` is untouched. `cargo update --workspace` then moves
+only the workspace members in the lockfile, which leaves `--locked` meaning
+what it meant. Checked locally by running it for `v1.2.3`, building, and
+confirming the binary says `cairns 1.2.3`.
+
+Publishing to crates.io stays off behind a repository variable. A tag that
+cuts binaries is a small mistake to make; a tag that publishes a crate version
+that can never be reused is not.
+
 ## MCP
 
 `cairns mcp` speaks JSON-RPC 2.0 over stdin and stdout. Read-only by default:

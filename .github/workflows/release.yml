@@ -29,6 +29,9 @@ jobs:
           targets: ${{ matrix.target }}
       - if: matrix.musl
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # The tag is the version. Nothing is committed.
+      - run: ./scripts/version-from-tag.sh "${{ github.ref_name }}"
+        shell: bash
       - run: cargo build --release --locked -p cairns --target ${{ matrix.target }}
 
       - name: Package
@@ -67,3 +70,25 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Opt-in: set the repository variable PUBLISH_TO_CRATES to "true" and add a
+  # CARGO_REGISTRY_TOKEN secret. Without both, a tag only cuts binaries.
+  crates:
+    needs: binaries
+    if: vars.PUBLISH_TO_CRATES == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: ./scripts/version-from-tag.sh "${{ github.ref_name }}"
+      # In dependency order, because each one has to be on the index before the
+      # next can resolve it.
+      - run: cargo publish -p cairns-core --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - run: cargo publish -p cairns-site --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - run: cargo publish -p cairns --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

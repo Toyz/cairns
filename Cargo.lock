@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "cairns"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "cairns-core",
  "cairns-site",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "cairns-core"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "cairns-site"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "cairns-core",
  "pulldown-cmark",

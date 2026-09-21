@@ -3,7 +3,10 @@ resolver = "3"
 members = ["crates/cairns-core", "crates/cairns-site", "crates/cairns"]
 
 [workspace.package]
-version = "0.1.0"
+# The tag is the version. CI rewrites this from `v*` on a release, and nothing
+# in the repo ever claims a release number, so there is no file to bump and no
+# way for a tag and a manifest to disagree.
+version = "0.0.0-dev"
 edition = "2024"
 # Let-chains, which config.rs uses.
 rust-version = "1.88"
@@ -19,8 +22,8 @@ lto = "thin"
 codegen-units = 1
 
 [workspace.dependencies]
-cairns-core = { path = "crates/cairns-core", version = "0.1.0" }
-cairns-site = { path = "crates/cairns-site", version = "0.1.0" }
+cairns-core = { path = "crates/cairns-core", version = "0.0.0-dev" }
+cairns-site = { path = "crates/cairns-site", version = "0.0.0-dev" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

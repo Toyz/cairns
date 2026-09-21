@@ -99,6 +99,20 @@ In a host that already has a shell this adds little - `cairns init` writes a
 skill that teaches the CLI, which is enough. It earns its place where there is
 no terminal.
 
+## Releasing
+
+The tag is the version. `Cargo.toml` says `0.0.0-dev` and never says anything
+else - pushing `v0.2.0` makes CI rewrite the workspace version from the tag,
+build the binaries and attach them with their checksums. Nothing to bump by
+hand, and no way for a tag and a manifest to disagree.
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Publishing to crates.io is off unless the repository variable
+`PUBLISH_TO_CRATES` is `true` and a `CARGO_REGISTRY_TOKEN` secret exists.
+
 ## The format
 
 The spec is in [docs/spec/](docs/spec/) and is versioned separately from this
