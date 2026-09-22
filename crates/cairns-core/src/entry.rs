@@ -482,13 +482,21 @@ fn scan<'a>(body: &'a str, mut hand: impl FnMut(Found<'a>)) {
         let mut in_code = false;
         let mut emitted = 0;
         while at < line.len() {
-            if line.as_bytes()[at] == b'`' {
+            // Step by characters, not bytes. `at += 1` walks into the middle
+            // of anything multi-byte, and the next `line[at..]` panics on a
+            // char boundary - which one `±` in a log was enough to do.
+            let Some(ch) = line[at..].chars().next() else {
+                break;
+            };
+            let step = ch.len_utf8();
+
+            if ch == '`' {
                 in_code = !in_code;
-                at += 1;
+                at += step;
                 continue;
             }
             if in_code || !line[at..].starts_with("[[") {
-                at += 1;
+                at += step;
                 continue;
             }
             let Some(close) = line[at..].find("]]") else {
@@ -565,5 +573,43 @@ mod reference_tests {
     fn a_reference_inside_inline_code_is_left_alone() {
         assert_eq!(numbers("Write `[[12]]` to link to [[12]]."), vec![12]);
         assert_eq!(numbers("The `[[area]]` table."), Vec::<u32>::new());
+    }
+}
+
+#[cfg(test)]
+mod utf8_tests {
+    use super::{references, rewrite_references};
+
+    /// Walking the scanner a byte at a time sliced into the middle of a
+    /// multi-byte character and panicked. One `±` in a worklog was enough.
+    #[test]
+    fn a_body_with_multibyte_characters_does_not_panic() {
+        for body in [
+            "The tolerance is ±0.5 and see [[3]].",
+            "±",
+            "`±` in code, then [[3]].",
+            "Em dash — and [[3]] after it.",
+            "Emoji 🍺 then [[3]].",
+            "±[[3]]±",
+            "```\n±\n```\nThen [[3]].",
+        ] {
+            let found = references(body);
+            let rewritten = rewrite_references(body, &|r| Some(format!("cairns:{}", r.number)));
+            assert!(
+                !rewritten.is_empty() || body.is_empty(),
+                "{body:?} rewrote to nothing"
+            );
+            if body.contains("[[3]]") && !body.starts_with("```") {
+                assert_eq!(found.len(), 1, "{body:?} -> {found:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn multibyte_text_around_a_reference_survives_the_rewrite() {
+        let out = rewrite_references("±0.5 and [[3]] and ±1", &|r| {
+            Some(format!("cairns:{}", r.number))
+        });
+        assert_eq!(out, "±0.5 and [3](cairns:3) and ±1");
     }
 }
