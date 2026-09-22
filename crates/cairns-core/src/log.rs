@@ -33,6 +33,9 @@ pub struct Log {
     /// What the site calls them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs_label: Option<String>,
+    /// The project's own links, for the rail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::config::Link>,
 }
 
 /// One reference page in the canonical document.
@@ -275,6 +278,7 @@ impl Log {
             readme: None,
             docs: pages,
             docs_label: config.docs.as_ref().map(|docs| docs.label.clone()),
+            links: config.links.clone(),
         }
     }
 }

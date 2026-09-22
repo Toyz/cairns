@@ -7,6 +7,7 @@
 
 pub mod feed;
 pub mod html;
+pub mod icon;
 
 use cairns_core::Log;
 use serde::Serialize;

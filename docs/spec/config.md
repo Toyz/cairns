@@ -86,6 +86,38 @@ One optional key, `header`, replacing the generated opening prose of
 `WORKLOG.md`. Everything else in that file is derived, which is why it is never
 hand-edited.
 
+## `[[link]]`
+
+The project's own links, shown in the rail below the generated navigation.
+That navigation can only ever know about pages cairns makes, and a project site
+usually needs to point somewhere else as well.
+
+```toml
+[[link]]
+label = "Repository"
+url   = "https://github.com/Toyz/cairns"
+icon  = "github"
+
+[[link]]
+label = "Releases"
+url   = "https://github.com/Toyz/cairns/releases"
+icon  = "download"
+```
+
+`icon` is optional and names one of a small built-in set, drawn inline:
+
+`github`, `globe`, `book`, `code`, `download`, `rss`, `chat`, `mail`, `star`,
+`link`
+
+with `site` and `web` for `globe`, `docs` for `book`, `feed` for `rss`, and
+`forum` and `discord` for `chat`. They are inline SVG rather than a font or a
+sprite for the same reason the page uses no webfonts: an icon that needs a
+request is missing for the first second, or forever behind a proxy.
+
+A name that is not built in renders no icon - a link without a glyph still
+works, and a typo should not stop a site building - but `check` reports it, so
+it does not stay quiet either.
+
 ## `[check]`
 
 ```toml

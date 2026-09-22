@@ -12,6 +12,16 @@ readme   = "README.md"
 
 # Reference pages beside the log. Opt-in: remove this section and the site has
 # no Reference tab.
+[[link]]
+label = "Repository"
+url   = "https://github.com/Toyz/cairns"
+icon  = "github"
+
+[[link]]
+label = "Releases"
+url   = "https://github.com/Toyz/cairns/releases"
+icon  = "download"
+
 [docs]
 dir   = "docs"
 label = "Reference"

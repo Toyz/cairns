@@ -124,6 +124,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let mut problems = log::problems(&config, &entries);
             problems.extend(log::doc_problems(&entries, &docs));
 
+            // An icon name that is not built in renders nothing. That is the
+            // right behaviour at build time - a typo should not stop a site -
+            // and the wrong behaviour to stay quiet about.
+            for link in &config.links {
+                if let Some(icon) = &link.icon
+                    && cairns_site::icon::svg(icon).is_none()
+                {
+                    problems.push(format!(
+                        "cairns.toml: link {:?} wants icon {icon:?}, which is not one of: {}",
+                        link.label,
+                        cairns_site::icon::NAMES.join(", ")
+                    ));
+                }
+            }
+
             // A stale index is the most common way a worklog starts lying, and
             // the cheapest to catch: render it again and compare.
             let built = Log::build(&config, entries, None);

@@ -25,6 +25,11 @@ pub struct Config {
     pub areas: Vec<Area>,
     #[serde(default, rename = "publish")]
     pub targets: Vec<Target>,
+    /// Links the project wants in the rail beside the generated navigation -
+    /// the repository, a demo, a chat. The generated nav can only ever know
+    /// about pages cairns makes.
+    #[serde(default, rename = "link")]
+    pub links: Vec<Link>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +65,18 @@ pub struct Site {
     /// can find out what the project is. Usually `README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+}
+
+/// One link in the rail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub label: String,
+    pub url: String,
+    /// The name of a built-in icon, or none. Names that are not built in are
+    /// left without an icon rather than failing: a link with no glyph still
+    /// works, and a typo should not stop a site building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// What `check` insists on beyond the things that are always errors.
