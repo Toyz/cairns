@@ -19,7 +19,7 @@ called verification - the page returns 200, the tags close, the rule is in the
 stylesheet - tests that the bytes are what I wrote, never that the result looks
 like anything.
 
-It is also how [12](0012-three-css-edits-three-wrong-anchors-and-half-a-stylesheet-gone.md)
+It is also how [[12]]
 went unnoticed. Half a stylesheet was missing and every check I had still
 passed, because a stylesheet with its middle deleted is a valid stylesheet.
 

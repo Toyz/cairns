@@ -91,6 +91,26 @@ stays on the entry that asked it, struck through, naming what closed it.
 `check` rejects a `resolves` aimed at an entry that left no question open,
 because that is almost always the wrong number and nothing else would catch it.
 
+## Referring to another entry
+
+```markdown
+As [[12]] showed, the anchors kept moving.
+The stylesheet loss is written up in [[12|entry twelve]].
+```
+
+`[[12]]` becomes a link to entry 12, labelled with the number and carrying the
+entry's title, and `check` rejects one that points at an entry which does not
+exist. Nothing to look up, nothing to mistype, and no breakage when a slug
+changes - which the older form, a markdown link to the entry's filename, could
+not promise.
+
+The older form still works and still renders on GitHub, where `[[12]]` is
+literal text. That is the trade: a reference reads better and cannot rot; a
+file link survives outside this tool.
+
+References are ignored inside code, fenced or inline, so a page can show the
+syntax, or a TOML snippet full of `[[area]]`, without either becoming a link.
+
 `supersedes` is what makes the append-only rule pay off. Entry 50 of hellbender
 demonstrates the case exactly - it overturns a claim made in entry 6 - and with
 the field set, a reader landing on entry 6 is told so, rather than believing a

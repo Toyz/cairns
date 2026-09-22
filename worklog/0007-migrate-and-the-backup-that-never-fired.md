@@ -56,7 +56,7 @@ absolute. The comparison is *always* false, so the backup branch was dead code
 and nothing said so. In the test clone the original came back out of git. In a
 repo where the log had uncommitted edits, it would not have.
 
-This is the same shape as the `init` bug in [4](0004-the-write-path-and-an-init-that-nearly-ate-hellbender-s.md):
+This is the same shape as the `init` bug in [[4]]:
 a command whose job is to help a project adopt the tool, destroying the thing it
 was adopting, and saying nothing. Twice now, which makes it a pattern rather than
 an accident - both times the destructive path was the one no test covered,
@@ -76,7 +76,7 @@ search.json 468 KB raw / 159 KB gzipped
 log.json    582 KB raw / 193 KB gzipped
 ```
 
-That answers most of what [6](0006-the-log-reads-as-a-website-and-the-feed-is-not-the-whole-log.md)
+That answers most of what [[6]]
 left open about client-side search. Fetched once, lazily, over a host that
 serves gzip, 159 KB is unremarkable. Linear growth puts a 500-entry log around
 410 KB gzipped, which is where a real index rather than a string scan starts to

@@ -420,3 +420,150 @@ mod summary_tests {
         );
     }
 }
+
+/// A reference to another entry, written `[[12]]` or `[[12|in other words]]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    pub number: u32,
+    /// The words to show, when the reference gave some.
+    pub label: Option<String>,
+}
+
+/// Rewrite every `[[12]]` in a body, skipping code.
+///
+/// `link` is given the reference and returns the markdown destination to use,
+/// or `None` to leave the text exactly as written. This has to happen on the
+/// source rather than on parsed events: a markdown parser reads `[[12]]` as
+/// nested bracket tokens and hands it over in pieces, so `[[` is never
+/// present in one text run to match on.
+pub fn rewrite_references(body: &str, link: &dyn Fn(&Reference) -> Option<String>) -> String {
+    let mut out = String::with_capacity(body.len());
+    scan(body, |found| match found {
+        Found::Text(text) => out.push_str(text),
+        Found::Reference(whole, reference) => match link(&reference) {
+            Some(destination) => {
+                let label = reference
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| reference.number.to_string());
+                out.push_str(&format!("[{label}]({destination})"));
+            }
+            None => out.push_str(whole),
+        },
+    });
+    out
+}
+
+enum Found<'a> {
+    Text(&'a str),
+    Reference(&'a str, Reference),
+}
+
+/// Walk a body, handing back its text and its references in order.
+///
+/// Code is skipped because a fenced TOML block full of `[[area]]` is not a
+/// reference to anything, and a page documenting the syntax should be able to
+/// show it without linking it.
+fn scan<'a>(body: &'a str, mut hand: impl FnMut(Found<'a>)) {
+    let mut fenced = false;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            hand(Found::Text(line));
+            continue;
+        }
+        if fenced {
+            hand(Found::Text(line));
+            continue;
+        }
+
+        let mut at = 0;
+        let mut in_code = false;
+        let mut emitted = 0;
+        while at < line.len() {
+            if line.as_bytes()[at] == b'`' {
+                in_code = !in_code;
+                at += 1;
+                continue;
+            }
+            if in_code || !line[at..].starts_with("[[") {
+                at += 1;
+                continue;
+            }
+            let Some(close) = line[at..].find("]]") else {
+                break;
+            };
+            let whole = &line[at..at + close + 2];
+            let inner = &line[at + 2..at + close];
+            let (digits, label) = match inner.split_once('|') {
+                Some((digits, label)) => (digits.trim(), Some(label.trim().to_string())),
+                None => (inner.trim(), None),
+            };
+
+            if !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit())
+                && let Ok(number) = digits.parse()
+            {
+                hand(Found::Text(&line[emitted..at]));
+                hand(Found::Reference(whole, Reference { number, label }));
+                emitted = at + close + 2;
+            }
+            at += close + 2;
+        }
+        hand(Found::Text(&line[emitted..]));
+    }
+}
+
+/// Every `[[12]]` in a body, in order, skipping code.
+///
+/// Code is skipped because a fenced TOML block full of `[[area]]` is not a
+/// reference to anything - and because a spec page that documents the syntax
+/// should be able to show it without linking it. Only digits count as a
+/// number, which alone rules out `[[area]]`, but the code rules are what make
+/// that a guarantee rather than a coincidence.
+pub fn references(body: &str) -> Vec<Reference> {
+    let mut found = Vec::new();
+    scan(body, |item| {
+        if let Found::Reference(_, reference) = item {
+            found.push(reference);
+        }
+    });
+    found
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::{Reference, references};
+
+    fn numbers(body: &str) -> Vec<u32> {
+        references(body).iter().map(|r| r.number).collect()
+    }
+
+    #[test]
+    fn a_reference_is_a_number_in_double_brackets() {
+        assert_eq!(
+            numbers("As [[12]] showed, and [[6]] before it."),
+            vec![12, 6]
+        );
+        assert_eq!(
+            references("[[12|the stylesheet disaster]]")[0],
+            Reference {
+                number: 12,
+                label: Some("the stylesheet disaster".into())
+            }
+        );
+    }
+
+    #[test]
+    fn toml_in_a_fence_is_not_a_reference() {
+        let body = "Config:\n\n```toml\n[[area]]\nname = \"spec\"\n[[publish]]\n```\n\nSee [[3]].";
+        assert_eq!(numbers(body), vec![3]);
+    }
+
+    #[test]
+    fn a_reference_inside_inline_code_is_left_alone() {
+        assert_eq!(numbers("Write `[[12]]` to link to [[12]]."), vec![12]);
+        assert_eq!(numbers("The `[[area]]` table."), Vec::<u32>::new());
+    }
+}

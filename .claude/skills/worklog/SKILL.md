@@ -108,6 +108,17 @@ Sub-headings inside an entry use `##` - the entry's own title is the `#`.
 across the whole log. It is the log's list of what the project does not yet
 know, so it is worth writing honestly rather than leaving blank.
 
+## Pointing at another entry
+
+Write `[[12]]`. It becomes a link to entry 12 carrying that entry's title, and
+`check` fails if entry 12 does not exist. `[[12|in other words]]` supplies your
+own wording.
+
+Use it freely in prose - "as [[12]] found", "this contradicts [[6]]". A log
+whose entries do not point at each other is a pile of entries.
+
+Inside code, fenced or inline, `[[...]]` is left exactly as written.
+
 ## Linking an entry to an earlier one
 
 The log is append-only. Never rewrite or renumber an entry. Two front matter

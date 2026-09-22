@@ -357,6 +357,17 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
             }
         }
 
+        // A `[[12]]` pointing at nothing is the link-rot the wiki form exists
+        // to prevent, so it is checked rather than silently left as text.
+        for reference in crate::entry::references(&entry.body) {
+            if !numbers.contains(&reference.number) {
+                problems.push(format!(
+                    "{}: references [[{}]], which does not exist",
+                    entry.path, reference.number
+                ));
+            }
+        }
+
         for older in &entry.front.resolves {
             match entries.iter().find(|other| other.front.number == *older) {
                 None => problems.push(format!(

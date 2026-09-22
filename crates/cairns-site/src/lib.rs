@@ -382,3 +382,73 @@ mod docs_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use cairns_core::{Config, Entry, RawEntry};
+
+    fn page(body: &str) -> String {
+        let config = Config::parse(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n\
+             repository = \"https://example.com/p\"\n\
+             [site]\nbase_url = \"https://example.com/p/\"\n[[area]]\nname = \"spec\"\n",
+        )
+        .unwrap();
+        let entries: Vec<Entry> = [(1, "The first thing", "Prose."), (2, "The second", body)]
+            .iter()
+            .map(|(number, title, body)| {
+                let text = format!(
+                    "---\nnumber: {number}\ntitle: {title}\ndate: 2026-09-20\narea: spec\n---\n\n\
+                     # {number}. {title}\n\n{body}\n\n**Still unknown:** nothing\n"
+                );
+                Entry::parse(&RawEntry {
+                    path: format!("worklog/{number:04}-e{number}.md"),
+                    bytes: text.into_bytes(),
+                })
+                .unwrap()
+            })
+            .collect();
+        let log = Log::build(&config, entries, None);
+        let by_number = log.entries.iter().map(|e| (e.number, e)).collect();
+        html::entry(&log, 1, &by_number)
+    }
+
+    #[test]
+    fn a_reference_becomes_a_link_carrying_the_entry_title() {
+        let html = page("As [[1]] showed.");
+        assert!(
+            html.contains(r#"<a href="../1-the-first-thing/" title="The first thing">1</a>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_reference_may_supply_its_own_words() {
+        let html = page("See [[1|the first thing we did]].");
+        assert!(html.contains(">the first thing we did</a>"), "{html}");
+    }
+
+    /// The spec pages show `[[area]]` in fenced TOML, and a docs page that
+    /// documents this syntax has to be able to print it.
+    #[test]
+    fn code_is_left_exactly_as_written() {
+        let fenced = page("```toml\n[[area]]\nname = \"spec\"\n```");
+        assert!(fenced.contains("[[area]]"), "a TOML table became a link");
+
+        let inline = page("Write `[[1]]` to link to [[1]].");
+        assert!(inline.contains("<code>[[1]]</code>"), "{inline}");
+        // Count the reference form specifically - the pager also links to
+        // entry 1, and an earlier version of this assertion counted that.
+        assert_eq!(
+            inline.matches(r#"title="The first thing">1</a>"#).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_reference_to_nothing_is_left_as_text() {
+        let html = page("See [[999]].");
+        assert!(html.contains("[[999]]"), "{html}");
+    }
+}

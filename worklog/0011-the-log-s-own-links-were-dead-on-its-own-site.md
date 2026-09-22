@@ -11,7 +11,7 @@ files: crates/cairns-site/src/html.rs, crates/cairns-site/src/feed.rs
 The skill tells you to correct an earlier entry by linking to it:
 
 ```markdown
-[12](0012-the-bwd-mesh-format.md)
+[[12]]
 ```
 
 That is right in the repo and right on GitHub. On the generated site it is a

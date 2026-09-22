@@ -107,6 +107,15 @@ impl Links<'_> {
             return url.to_string();
         }
 
+        // The scheme `[[12]]` is rewritten to. Resolved here so a reference and
+        // a written-out link reach the same place by the same code.
+        if let Some(number) = url.strip_prefix("cairns:")
+            && let Ok(number) = number.trim().parse::<u32>()
+            && let Some(entry) = self.log.entries.iter().find(|entry| entry.number == number)
+        {
+            return self.site(&format!("{}-{}/", entry.number, entry.slug));
+        }
+
         let (path, fragment) = match url.split_once('#') {
             Some((path, fragment)) => (path, format!("#{fragment}")),
             None => (url, String::new()),
@@ -178,7 +187,27 @@ pub struct Heading {
 /// several sections is unreadable without one - `pulldown-cmark` emits no ids
 /// of its own, so they are assigned here before the HTML is pushed.
 fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, String) {
-    let mut events: Vec<Event> = Parser::new_ext(text, options())
+    // `[[12]]` becomes `[12](cairns:12)` before parsing, and `resolve` turns
+    // that scheme into the entry's URL - so references and written-out links
+    // take exactly the same path through the renderer.
+    let text = cairns_core::entry::rewrite_references(text, &|reference| {
+        links
+            .log
+            .entries
+            .iter()
+            .find(|entry| entry.number == reference.number)
+            // The title rides along as the link's title attribute, so a bare
+            // number in prose still says what it points at on hover.
+            .map(|entry| {
+                format!(
+                    "cairns:{} \"{}\"",
+                    entry.number,
+                    entry.title.replace('"', "'")
+                )
+            })
+    });
+
+    let mut events: Vec<Event> = Parser::new_ext(&text, options())
         .map(|event| match event {
             Event::Start(Tag::Link {
                 link_type,

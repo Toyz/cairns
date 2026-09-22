@@ -104,7 +104,7 @@ worklog_read 47  ->  NOTE: something claimed here was corrected by entry 56.
 ```
 
 The reason this was half a day rather than a week is a decision from
-[1](0001-the-format-is-the-asset-so-the-spec-is-written-down-first.md): the core
+[[1]]: the core
 has no filesystem in its API and `log.json` is already the canonical
 serialisation, so the server is a transport over a document that existed, not
 new logic.

@@ -38,9 +38,9 @@ is almost always a wrong number, and nothing else in the tool would notice it.
 
 ## The one real case, backfilled
 
-[6](0006-the-log-reads-as-a-website-and-the-feed-is-not-the-whole-log.md) ended
+[[6]] ended
 asking whether client-side search stays sensible as a log grows.
-[7](0007-migrate-and-the-backup-that-never-fired.md) measured it at 192 entries
+[[7]] measured it at 192 entries
 and answered it. The field did not exist when 7 was written, so `resolves: 6`
 was added to it afterwards.
 

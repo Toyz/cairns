@@ -52,7 +52,7 @@ project fix its history before it can be used is a tool nobody adopts.
 
 **Still unknown:** whether the same argument applies to `files`, which is
 optional and which
-[16](0016-a-field-carried-all-the-way-through-and-shown-nowhere.md) has only
+[[16]] has only
 just made visible. An entry about code with no `files` is as silently
 incomplete as one with no open question - but unlike the trailer there is no
 word for "this entry is not about any file".
