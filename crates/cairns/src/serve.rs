@@ -40,7 +40,14 @@ pub fn serve(
     let mut built_at = newest(&root, &config);
     let mut generation: u64 = 0;
 
-    println!("{} files on {address}", site.files.len());
+    // The version, because a server started before an upgrade keeps running
+    // the old binary and renders the old site - which looks exactly like a
+    // config change that did not take.
+    println!(
+        "cairns {} - {} files on {address}",
+        env!("CARGO_PKG_VERSION"),
+        site.files.len()
+    );
     println!("pages reload themselves when an entry changes; ctrl-c to stop");
     if open {
         let opener = if cfg!(target_os = "macos") {

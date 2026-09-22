@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// `cairns.toml`. See `docs/spec/config.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "spec_version")]
     pub spec_version: u32,
@@ -33,6 +34,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Project {
     pub name: String,
     /// Permanent. Half of an entry's canonical id, `{slug}/{number}`.
@@ -46,6 +48,7 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Paths {
     #[serde(default = "entries_dir")]
     pub entries: String,
@@ -54,6 +57,7 @@ pub struct Paths {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Site {
     /// Every internal link renders against this, so one build serves from a
     /// Pages sub-path and from a domain root alike.
@@ -69,6 +73,7 @@ pub struct Site {
 
 /// One link in the rail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Link {
     pub label: String,
     pub url: String,
@@ -81,6 +86,7 @@ pub struct Link {
 
 /// What `check` insists on beyond the things that are always errors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Check {
     /// Whether every entry must end with a `**Still unknown:**` line.
     ///
@@ -114,6 +120,7 @@ impl Default for Check {
 
 /// A tree of reference pages beside the log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Docs {
     pub dir: String,
     /// What the site calls them. "Reference" reads better than "Docs" beside
@@ -129,6 +136,7 @@ fn docs_label() -> String {
 /// The generated index. Only its opening prose is a project's to write; the
 /// counts and the table are derived, which is why it is never hand-edited.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Index {
     /// Replaces the default opening paragraph. A project explaining what its
     /// log is for says it better than a generated sentence can.
@@ -137,6 +145,7 @@ pub struct Index {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Area {
     pub name: String,
     /// One phrase, copied verbatim into the generated skill.
@@ -145,6 +154,7 @@ pub struct Area {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Target {
     pub name: String,
     #[serde(rename = "type")]
