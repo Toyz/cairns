@@ -25,12 +25,32 @@ scrolling, and two entries written in the same session do not collide in a diff.
 
 ## Writing one
 
+Write the whole entry in one command, with the prose on stdin:
+
 ```sh
-cairns new "Short title in plain words" --area spec,core --files "a.rs,b.rs"
+cairns new "Short title in plain words" --area spec,core --files "a.rs,b.rs" \
+  --unknown "what remains open, or nothing" --body - <<'EOF'
+The finding first, then the evidence.
+
+## A sub-heading if it needs one
+EOF
 ```
 
-That creates the file with its number, date and front matter filled in, and
-refreshes the index. Then write the prose into it.
+That numbers and dates the entry, writes the front matter and the `# N. Title`
+heading, appends the `**Still unknown:**` line from `--unknown`, and refreshes
+the index. There is no file to open and edit afterwards.
+
+- `--body -` reads the prose from stdin. Quote the heredoc marker (`<<'EOF'`)
+  so backticks and `$` in the prose arrive as written.
+- The body is the prose only. Do not start it with the `# N. Title` heading -
+  the command writes that, and drops a leading one if you do.
+- Say what is still unknown **once**: either `--unknown "..."`, or a
+  `**Still unknown:**` line at the end of the body - not both, and not neither.
+  `--unknown nothing` closes the entry out. The command refuses the other two
+  cases and says which it was, before anything is written.
+
+Without `--body`, `cairns new` writes a stub with the front matter and heading,
+to be filled in by editing the file.
 
 An entry may be filed under **several areas at once** - comma separated, as
 above, or by repeating `--area`. Where a piece of work genuinely sits in two,

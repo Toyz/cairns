@@ -40,6 +40,14 @@ enum Command {
         /// Earlier entries whose open question this one answers.
         #[arg(long, value_delimiter = ',')]
         resolves: Vec<u32>,
+        /// The prose, as markdown, or `-` to read it from stdin. Without it the
+        /// entry is a stub to fill in.
+        #[arg(long)]
+        body: Option<String>,
+        /// What is still unknown, or `nothing`. Becomes the entry's
+        /// `**Still unknown:**` line, unless the body already ends with one.
+        #[arg(long)]
+        unknown: Option<String>,
     },
     /// The number the next entry would take.
     Next,
@@ -212,6 +220,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             files,
             supersedes,
             resolves,
+            body,
+            unknown,
         } => {
             let (root, config) = load()?;
             // `--area "a, b"` and `--area a,b` are the same thing. The front
@@ -234,6 +244,20 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .into());
                 }
             }
+
+            // Read and settled before a number is taken, so a body that is
+            // refused leaves nothing behind.
+            let body = match body.as_deref() {
+                Some("-") => {
+                    use std::io::IsTerminal;
+                    if std::io::stdin().is_terminal() {
+                        eprintln!("reading the body from stdin; end it with ctrl-d");
+                    }
+                    Some(std::io::read_to_string(std::io::stdin())?)
+                }
+                other => other.map(str::to_string),
+            };
+            let prose = compose_body(body.as_deref(), unknown.as_deref())?;
 
             let dir = root.join(&config.paths.entries);
             let number = next_number(&dir)?;
@@ -262,8 +286,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 &path,
                 format!(
                     "---\nnumber: {number}\ntitle: {title}\ndate: {today}\n\
-                     area: {}\n{links}---\n\n# {number}. {title}\n\n\n\n\
-                     **Still unknown:** \n",
+                     area: {}\n{links}---\n\n# {number}. {title}\n\n{prose}\n",
                     area.join(", ")
                 ),
             )?;
@@ -663,6 +686,62 @@ test    = "harnesses and fixtures"
     )
 }
 
+/// Everything in an entry after its heading: the prose, then the
+/// `**Still unknown:**` line.
+///
+/// Built here so that whoever writes an entry - usually a model - can hand the
+/// prose over on stdin instead of creating a stub and then editing it, which
+/// was the step that went wrong. The trailer is the other thing that went
+/// wrong, so there is exactly one way for it to arrive and a refusal that says
+/// how when there is none: a trailer already in the body, or `--unknown`, never
+/// both and never neither. Defaulting to `nothing` would be the silent hole
+/// `check` exists to close.
+///
+/// A leading `# heading` in the body is dropped, because the command writes the
+/// entry's own and a second one is the most common thing handed over with it.
+pub fn compose_body(body: Option<&str>, unknown: Option<&str>) -> Result<String, String> {
+    let unknown = unknown.map(str::trim);
+    let Some(body) = body else {
+        // The stub: prose to write, the trailer filled if it was given.
+        return Ok(format!(
+            "\n\n{} {}",
+            cairns_core::entry::STILL_UNKNOWN,
+            unknown.unwrap_or_default()
+        ));
+    };
+
+    let mut body = body.trim();
+    if body.starts_with("# ") {
+        body = body
+            .split_once('\n')
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or("");
+    }
+    if body.is_empty() {
+        return Err("the body is empty".into());
+    }
+
+    let marker = cairns_core::entry::STILL_UNKNOWN;
+    match (has_trailer(body), unknown) {
+        (true, None) => Ok(body.to_string()),
+        (true, Some(_)) => Err(format!(
+            "the body already has a `{marker}` line - drop it or drop --unknown, not both"
+        )),
+        (false, Some("")) | (false, None) => Err(format!(
+            "say what this entry leaves open: --unknown \"the open question\", or \
+             --unknown nothing if it closes out (or end the body with a `{marker}` line)"
+        )),
+        (false, Some(unknown)) => Ok(format!("{body}\n\n{marker} {unknown}")),
+    }
+}
+
+/// Whether the text has a `**Still unknown:**` line of its own - at the start
+/// of a line, as the spec requires, not merely mentioned in a sentence.
+pub fn has_trailer(text: &str) -> bool {
+    text.match_indices(cairns_core::entry::STILL_UNKNOWN)
+        .any(|(at, _)| at == 0 || text[..at].ends_with('\n'))
+}
+
 /// Split values, trimmed, with the empties dropped.
 fn trimmed(values: Vec<String>) -> Vec<String> {
     values
@@ -898,6 +977,52 @@ mod tests {
 
     fn config() -> Config {
         Config::parse(&starter_config("A Project")).expect("the starter config is valid")
+    }
+
+    #[test]
+    fn a_body_takes_its_trailer_from_unknown() {
+        assert_eq!(
+            compose_body(Some("Prose.\n"), Some("why it hangs")).unwrap(),
+            "Prose.\n\n**Still unknown:** why it hangs"
+        );
+    }
+
+    #[test]
+    fn a_body_that_ends_with_a_trailer_keeps_it() {
+        let body =
+            "Prose that mentions **Still unknown:** in passing.\n\n**Still unknown:** nothing";
+        assert_eq!(compose_body(Some(body), None).unwrap(), body);
+        // Two trailers is the confusion this exists to prevent.
+        assert!(compose_body(Some(body), Some("nothing")).is_err());
+    }
+
+    #[test]
+    fn a_body_with_no_trailer_at_all_is_refused_with_the_fix() {
+        let error = compose_body(
+            Some("Prose that mentions **Still unknown:** mid-line."),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("--unknown nothing"), "{error}");
+        assert!(compose_body(Some("Prose."), Some("  ")).is_err());
+    }
+
+    #[test]
+    fn a_body_that_repeats_the_heading_loses_it() {
+        assert_eq!(
+            compose_body(Some("# 4. The title\n\nProse."), Some("nothing")).unwrap(),
+            "Prose.\n\n**Still unknown:** nothing"
+        );
+        assert!(compose_body(Some("# Only a heading"), Some("nothing")).is_err());
+    }
+
+    #[test]
+    fn without_a_body_the_stub_is_unchanged() {
+        assert_eq!(compose_body(None, None).unwrap(), "\n\n**Still unknown:** ");
+        assert_eq!(
+            compose_body(None, Some("x")).unwrap(),
+            "\n\n**Still unknown:** x"
+        );
     }
 
     #[test]

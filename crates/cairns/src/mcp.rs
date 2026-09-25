@@ -238,7 +238,7 @@ fn tools(config: &Config, writable: bool) -> Vec<Value> {
                         "description": "One or more. Say so when the work genuinely sits in two.",
                     },
                     "body": { "type": "string", "description": "The prose, as markdown. No heading - the title becomes it." },
-                    "still_unknown": { "type": "string", "description": "What remains open, or \"nothing\"." },
+                    "still_unknown": { "type": "string", "description": "What remains open, or \"nothing\" - the default. Leave it out if the body already ends with a **Still unknown:** line." },
                     "files": { "type": "array", "items": { "type": "string" } },
                     "supersedes": {
                         "type": "array", "items": { "type": "integer" },
@@ -454,16 +454,24 @@ fn new_entry(root: &Path, config: &Config, arguments: &Value) -> Result<String, 
         front.push_str(&format!("supersedes: {}\n", supersedes.join(", ")));
     }
 
+    // The tool has always closed an entry out when `still_unknown` is absent,
+    // and its schema says so; only a trailer already in the body changes that,
+    // so an entry never ends up with two.
     let unknown = arguments
         .get("still_unknown")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or("nothing");
+        .filter(|text| !text.is_empty());
+    let unknown = match unknown {
+        Some(text) => Some(text),
+        None if crate::has_trailer(body) => None,
+        None => Some("nothing"),
+    };
+    let prose = crate::compose_body(Some(body), unknown).map_err(invalid)?;
 
     std::fs::write(
         &path,
-        format!("{front}---\n\n# {number}. {title}\n\n{body}\n\n**Still unknown:** {unknown}\n"),
+        format!("{front}---\n\n# {number}. {title}\n\n{prose}\n"),
     )
     .map_err(|e| internal(e.to_string()))?;
 
