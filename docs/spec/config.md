@@ -33,17 +33,10 @@ readme   = "README.md"
 dir   = "docs"
 label = "Reference"
 
-[[area]]
-name  = "format"
-about = "a container or record layout decoded"
-
-[[area]]
-name  = "decomp"
-about = "facts pulled out of HELLBEND.EXE itself"
-
-[[area]]
-name  = "port"
-about = "Rust port architecture and progress"
+[area]
+format = "a container or record layout decoded"
+decomp = "facts pulled out of HELLBEND.EXE itself"
+port   = "Rust port architecture and progress"
 
 [[publish]]
 name = "site"
@@ -162,15 +155,46 @@ A `README.md` or `index.md` **is its directory**, not a page inside it.
 rest of that directory listed beneath it. Listing it as a peer of the pages it
 introduces would be backwards.
 
-## `[[area]]`
+## `[area]`
 
-An ordered list, not a map, because the order is the order they are presented
-in - in the generated skill, in the index summary, and in the site's filters.
+The short form is one line per area: its name, and one phrase saying what
+belongs under it.
+
+```toml
+[area]
+format = "a container or record layout decoded"
+decomp = "facts pulled out of HELLBEND.EXE itself"
+```
+
+The order they are written in is the order they are presented in - in the
+generated skill, in the index summary, and in the site's filters. A reader of
+this file must keep it, which a TOML library that hands back a sorted map does
+not do by default.
 
 Areas are entirely project-defined. The original tool hard-coded fifteen of
 them, several specific to one 1996 game, which is the single thing that most
 stopped the format from being usable anywhere else. `cairns init` offers a
 starting set; a project is expected to edit it.
+
+### The long form
+
+The same areas can be written as an `[[area]]` list, one table per area:
+
+```toml
+[[area]]
+name  = "format"
+about = "a container or record layout decoded"
+```
+
+It is the form to reach for when an area needs to say more than one phrase:
+each area is a table, so a key added to areas later has somewhere to go, where
+the short form only has room for `about`. Until then the two mean exactly the
+same thing, and the short form is what `cairns init` writes, because an area
+that is a chore to add is one that does not get added - entries get filed under
+the nearest wrong one instead.
+
+TOML does not allow both forms in one file. In the long form `about` may be
+omitted, and a name declared twice is an error.
 
 An entry filed under an area not declared here is an error, and that strictness
 is the point: it is what stops a log accumulating `render`, `rendering` and

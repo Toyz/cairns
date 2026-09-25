@@ -583,7 +583,56 @@ article > *:last-child { margin-bottom: 0; }
 }
 .files a { color: var(--ink-soft); text-decoration: none; }
 .files a:hover { color: var(--accent); }
-.files code { font-size: 0.95em; }
+.files code { font-size: 0.95em; background: none; padding: 0; }
+
+/* A directory is said once and its files follow it, so the directory is the
+   quiet part and the names are what the eye lands on. */
+.files-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.6rem;
+}
+.files-dir {
+  /* Cancels the group's gap: the directory and its first file are one path. */
+  margin-right: -0.6rem;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* Past a handful the list folds behind its count. It is still one line of
+   chrome above the prose, not a wall of paths. */
+details.files { display: block; }
+details.files summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+details.files summary::-webkit-details-marker { display: none; }
+details.files summary::after {
+  content: "";
+  width: 0.4em;
+  height: 0.4em;
+  border-right: 1.5px solid var(--ink-faint);
+  border-bottom: 1.5px solid var(--ink-faint);
+  transform: translateY(-0.2em) rotate(45deg);
+  transition: transform 0.15s;
+}
+details.files[open] summary::after { transform: translateY(0.05em) rotate(-135deg); }
+.files-count { color: var(--ink-soft); }
+details.files summary:hover .files-count { color: var(--accent); }
+.files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--rule);
+}
 
 pre {
   background: var(--code-bg);

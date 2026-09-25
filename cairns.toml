@@ -26,30 +26,15 @@ icon  = "download"
 dir   = "docs"
 label = "Reference"
 
-[[area]]
-name  = "spec"
-about = "the format itself - entries, config, log.json, publishing"
-[[area]]
-name  = "core"
-about = "cairns-core: parsing, validation, the canonical document"
-[[area]]
-name  = "site"
-about = "the renderer and the static site it emits"
-[[area]]
-name  = "cli"
-about = "the cairns command and its surface"
-[[area]]
-name  = "publish"
-about = "publish targets and the delivery payload"
-[[area]]
-name  = "skill"
-about = "the Claude skill shipped with the tool"
-[[area]]
-name  = "adoption"
-about = "migrating an existing worklog onto cairns"
-[[area]]
-name  = "build"
-about = "workspace layout, CI, releases"
+[area]
+spec     = "the format itself - entries, config, log.json, publishing"
+core     = "cairns-core: parsing, validation, the canonical document"
+site     = "the renderer and the static site it emits"
+cli      = "the cairns command and its surface"
+publish  = "publish targets and the delivery payload"
+skill    = "the Claude skill shipped with the tool"
+adoption = "migrating an existing worklog onto cairns"
+build    = "workspace layout, CI, releases"
 
 [[publish]]
 name = "site"

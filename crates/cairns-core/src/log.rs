@@ -342,7 +342,10 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
 
         for area in &entry.front.areas {
             if !config.knows_area(area) {
-                problems.push(format!("{}: unknown area {area:?}", entry.path));
+                problems.push(format!(
+                    "{}: unknown area {area:?} - declare it under [area] in cairns.toml",
+                    entry.path
+                ));
             }
         }
 

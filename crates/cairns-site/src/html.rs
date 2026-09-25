@@ -593,6 +593,67 @@ pub fn home(log: &Log) -> String {
     )
 }
 
+/// More files than this and the list folds away behind its count.
+const FILES_SHOWN: usize = 5;
+
+/// An entry's files, grouped under their directories.
+///
+/// Printed flat, fifteen paths were a wall between the title and the first
+/// sentence, and most of it was the same `crates/x/src/` over and over. The
+/// directory is said once and the names follow it, in the order written. Past
+/// [`FILES_SHOWN`] the list is still the entry's link to the code, but not the
+/// thing a reader came for, so it starts closed.
+fn files_html(files: &[String], links: &Links<'_>) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let mut groups: Vec<(&str, Vec<(&str, &String)>)> = Vec::new();
+    for file in files {
+        // A directory is written with a trailing slash; it is named by its
+        // last component like any file, not grouped under itself.
+        let (dir, name) = match file.trim_end_matches('/').rsplit_once('/') {
+            Some((dir, _)) => (&file[..=dir.len()], &file[dir.len() + 1..]),
+            None => ("", file.as_str()),
+        };
+        match groups.iter_mut().find(|(seen, _)| *seen == dir) {
+            Some((_, names)) => names.push((name, file)),
+            None => groups.push((dir, vec![(name, file)])),
+        }
+    }
+
+    let mut list = String::new();
+    for (dir, names) in &groups {
+        list.push_str("<span class=\"files-group\">");
+        if !dir.is_empty() {
+            let _ = write!(list, "<span class=\"files-dir\">{}</span>", escape(dir));
+        }
+        for (name, file) in names {
+            let _ = write!(
+                list,
+                "<a href=\"{}\" title=\"{}\"><code>{}</code></a>",
+                escape(&links.resolve(&format!("../{file}"))),
+                escape(file),
+                escape(name)
+            );
+        }
+        list.push_str("</span>");
+    }
+
+    if files.len() <= FILES_SHOWN {
+        return format!("<p class=\"files\"><span class=\"files-label\">Files</span>{list}</p>\n");
+    }
+    let dirs = match groups.len() {
+        1 => String::new(),
+        n => format!(" in {n} directories"),
+    };
+    format!(
+        "<details class=\"files\"><summary><span class=\"files-label\">Files</span>\
+         <span class=\"files-count\">{count}{dirs}</span></summary>\
+         <div class=\"files-list\">{list}</div></details>\n",
+        count = files.len()
+    )
+}
+
 /// One entry, with its corrections, its open question, and its neighbours.
 pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> String {
     let this = &log.entries[at];
@@ -676,18 +737,7 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
 
     // `files` has been parsed, validated and exported since the first version
     // and shown nowhere. It is the entry's link to the code it is about.
-    if !this.files.is_empty() {
-        body.push_str("<p class=\"files\"><span class=\"files-label\">Files</span>");
-        for file in &this.files {
-            let _ = write!(
-                body,
-                "<a href=\"{}\"><code>{}</code></a>",
-                escape(&links.resolve(&format!("../{file}"))),
-                escape(file)
-            );
-        }
-        body.push_str("</p>\n");
-    }
+    body.push_str(&files_html(&this.files, &links));
 
     let (headings, prose_html) = markdown_with_headings(prose(this), &links);
     body.push_str(&prose_html);

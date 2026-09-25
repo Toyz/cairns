@@ -223,8 +223,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             for name in &area {
                 if !config.knows_area(name) {
                     let known: Vec<&str> = config.areas.iter().map(|a| a.name.as_str()).collect();
+                    // Saying how to add one is half the fix: an area that is a
+                    // chore to add gets filed under the nearest wrong one.
                     return Err(format!(
-                        "unknown area {name:?}; cairns.toml declares {}",
+                        "unknown area {name:?}; cairns.toml declares {}\n\
+                         to add it, write this under [area] in cairns.toml:\n    \
+                         {name} = \"what belongs here\"",
                         known.join(", ")
                     )
                     .into());
@@ -453,7 +457,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .areas
                     .first()
                     .map(|a| a.name.clone())
-                    .ok_or("no [[area]] in cairns.toml to file migrated entries under")?,
+                    .ok_or("no [area] in cairns.toml to file migrated entries under")?,
             };
             if !config.knows_area(&area) {
                 return Err(format!("unknown area {area:?}").into());
@@ -648,24 +652,13 @@ description = ""
 
 # Edit these. They are the one part of a worklog that has to fit the project,
 # and an area nobody chose gets used for everything or for nothing.
-[[area]]
-name  = "design"
-about = "a decision made, with the alternatives rejected"
-[[area]]
-name  = "build"
-about = "how the thing is put together"
-[[area]]
-name  = "bug"
-about = "a fault diagnosed, with the root cause"
-[[area]]
-name  = "perf"
-about = "a measurement taken"
-[[area]]
-name  = "tooling"
-about = "the scripts and helpers around the project"
-[[area]]
-name  = "test"
-about = "harnesses and fixtures"
+[area]
+design  = "a decision made, with the alternatives rejected"
+build   = "how the thing is put together"
+bug     = "a fault diagnosed, with the root cause"
+perf    = "a measurement taken"
+tooling = "the scripts and helpers around the project"
+test    = "harnesses and fixtures"
 "#
     )
 }

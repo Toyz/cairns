@@ -224,6 +224,45 @@ mod tests {
         }
     }
 
+    fn entry_page_with_files(files: &str) -> String {
+        let built = log(&[(
+            &format!("number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec\nfiles: {files}"),
+            "Some prose.\n\n**Still unknown:** nothing",
+        )]);
+        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
+        html::entry(&built, 0, &by_number)
+    }
+
+    #[test]
+    fn an_entrys_files_say_each_directory_once() {
+        let page = entry_page_with_files("src/a.rs, src/b.rs, docs/spec/, README.md");
+        assert_eq!(
+            page.matches("<span class=\"files-dir\">src/</span>")
+                .count(),
+            1
+        );
+        assert!(page.contains("<code>a.rs</code>") && page.contains("<code>b.rs</code>"));
+        // A directory is named by its last component, under its parent.
+        assert!(page.contains("<span class=\"files-dir\">docs/</span><a href=\""));
+        assert!(page.contains("<code>spec/</code>"));
+        // The full path is still there, on hover.
+        assert!(page.contains("title=\"src/a.rs\""));
+        assert!(
+            !page.contains("<details class=\"files\""),
+            "a short list folded"
+        );
+    }
+
+    #[test]
+    fn a_long_list_of_files_folds_behind_its_count() {
+        let files: Vec<String> = (0..15)
+            .map(|n| format!("crates/c{}/f{n}.rs", n % 3))
+            .collect();
+        let page = entry_page_with_files(&files.join(", "));
+        assert!(page.contains("<details class=\"files\">"));
+        assert!(page.contains("15 in 3 directories"));
+    }
+
     #[test]
     fn the_entry_page_renders_prose_once_and_the_trailer_separately() {
         let built = simple();

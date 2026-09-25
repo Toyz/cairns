@@ -1,5 +1,7 @@
 use crate::error::{Error, Result};
+use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// `cairns.toml`. See `docs/spec/config.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +24,9 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<Docs>,
     /// Ordered, because the order is how areas are presented everywhere.
-    #[serde(default, rename = "area")]
+    /// Written either as one `[area]` table of `name = "about"` or as an
+    /// `[[area]]` list; see [`areas`].
+    #[serde(default, rename = "area", deserialize_with = "areas")]
     pub areas: Vec<Area>,
     #[serde(default, rename = "publish")]
     pub targets: Vec<Target>,
@@ -181,6 +185,52 @@ pub enum TargetKind {
     Http,
 }
 
+/// `[area]` as a table, `name = "about"` per line, or `[[area]]` as a list of
+/// `name` and `about`. Both read into the same list, in the order written.
+///
+/// The table is the short form: an area is usually a name and a phrase, and
+/// the list spends three lines and two keys saying so. The list is the long
+/// form, and the one with room to grow - each area is its own table, so a key
+/// added later has somewhere to go. TOML will not let one file hold both, so
+/// there is nothing to reconcile.
+fn areas<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Vec<Area>, D::Error> {
+    struct Areas;
+
+    impl<'de> Visitor<'de> for Areas {
+        type Value = Vec<Area>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an [area] table of name = \"about\", or [[area]] entries")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Vec<Area>, A::Error> {
+            let mut areas = Vec::new();
+            while let Some(area) = seq.next_element::<Area>()? {
+                areas.push(area);
+            }
+            Ok(areas)
+        }
+
+        // The deserializer hands keys over in document order, which is the
+        // order the areas are presented in; a sorted map would lose it.
+        fn visit_map<A: MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Vec<Area>, A::Error> {
+            let mut areas = Vec::new();
+            while let Some((name, about)) = map.next_entry::<String, String>()? {
+                areas.push(Area { name, about });
+            }
+            Ok(areas)
+        }
+    }
+
+    deserializer.deserialize_any(Areas)
+}
+
 impl Config {
     pub fn parse(text: &str) -> Result<Self> {
         let config: Config = toml::from_str(text).map_err(|e| Error::Config(e.to_string()))?;
@@ -205,8 +255,18 @@ impl Config {
         }
         if self.areas.is_empty() {
             return Err(Error::Config(
-                "no [[area]] declared - an entry must be filable".into(),
+                "no [area] declared - an entry must be filable".into(),
             ));
+        }
+        // TOML refuses a repeated key in the table form; the list form has to
+        // be told.
+        for (at, area) in self.areas.iter().enumerate() {
+            if self.areas[..at].iter().any(|other| other.name == area.name) {
+                return Err(Error::Config(format!(
+                    "area {:?} declared twice",
+                    area.name
+                )));
+            }
         }
         for target in &self.targets {
             // The file is committed, so a literal here is a leaked credential
@@ -250,4 +310,56 @@ fn entries_dir() -> String {
 
 fn index_file() -> String {
     "WORKLOG.md".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROJECT: &str = "[project]\nname = \"P\"\nslug = \"p\"\n";
+
+    fn names(config: &Config) -> Vec<&str> {
+        config.areas.iter().map(|area| area.name.as_str()).collect()
+    }
+
+    #[test]
+    fn an_area_table_reads_in_the_order_written() {
+        // Deliberately not alphabetical: the order is the presentation order.
+        let config = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"the format\"\ncore = \"parsing\"\nbuild = \"CI\"\n"
+        ))
+        .unwrap();
+        assert_eq!(names(&config), ["spec", "core", "build"]);
+        assert_eq!(config.areas[1].about, "parsing");
+    }
+
+    #[test]
+    fn the_area_list_reads_the_same() {
+        let config = Config::parse(&format!(
+            "{PROJECT}[[area]]\nname = \"spec\"\nabout = \"the format\"\n[[area]]\nname = \"core\"\n"
+        ))
+        .unwrap();
+        assert_eq!(names(&config), ["spec", "core"]);
+        assert_eq!(config.areas[1].about, "");
+    }
+
+    #[test]
+    fn an_empty_area_table_is_still_no_areas() {
+        let error = Config::parse(&format!("{PROJECT}[area]\n")).unwrap_err();
+        assert!(error.to_string().contains("no [area] declared"), "{error}");
+    }
+
+    #[test]
+    fn an_area_about_must_be_text() {
+        assert!(Config::parse(&format!("{PROJECT}[area]\nspec = 3\n")).is_err());
+    }
+
+    #[test]
+    fn a_duplicate_area_in_the_list_form_is_refused() {
+        let error = Config::parse(&format!(
+            "{PROJECT}[[area]]\nname = \"spec\"\n[[area]]\nname = \"spec\"\n"
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("declared twice"), "{error}");
+    }
 }
