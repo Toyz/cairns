@@ -36,6 +36,13 @@ pub struct Log {
     /// The project's own links, for the rail.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::config::Link>,
+    /// The project's palette overrides, from `[colors]`.
+    #[serde(default, skip_serializing_if = "crate::config::Colors::is_empty")]
+    pub colors: crate::config::Colors,
+    /// The project's own stylesheet, as text. Read by whoever owns the
+    /// filesystem, like the README, so the renderer still consumes one thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stylesheet: Option<String>,
 }
 
 /// One reference page in the canonical document.
@@ -279,6 +286,8 @@ impl Log {
             docs: pages,
             docs_label: config.docs.as_ref().map(|docs| docs.label.clone()),
             links: config.links.clone(),
+            colors: config.colors.clone(),
+            stylesheet: None,
         }
     }
 }

@@ -47,8 +47,11 @@ identically everywhere and can never grow ambiguity:
 
 - one `key: value` per line, key first, first colon splits
 - keys are lower-case ASCII with no spaces
-- values are plain text, trimmed of surrounding whitespace, never quoted, never
-  spanning lines, with no comments, anchors, blocks or nesting
+- values are plain text, trimmed of surrounding whitespace, never spanning
+  lines, with no comments, anchors, blocks or nesting
+- values are not quoted, but a value wrapped in one matching pair of `"` or `'`,
+  with no quote of the same kind inside, is read without them - writers quote a
+  title with a colon in it on reflex, and a YAML reader would strip them too
 - list-valued fields are comma-separated on the single line
 - a blank line inside front matter is ignored; anything else is an error
 

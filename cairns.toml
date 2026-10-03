@@ -10,6 +10,28 @@ repository  = "https://github.com/Toyz/cairns"
 base_url = "https://toyz.github.io/cairns/"
 readme   = "README.md"
 
+# Stone paper and lichen green - a cairn is a stack of stones on a trail.
+[colors.light]
+paper      = "#f5f4ef"
+paper-sunk = "#ebe9e1"
+rule       = "#dcd9ce"
+rule-faint = "#e8e6de"
+code-bg    = "#eeece4"
+accent     = "#4a7a35"
+link       = "#2b5d78"
+mark       = "#e1ecc4"
+
+[colors.dark]
+paper      = "#111412"
+paper-sunk = "#181c19"
+ink-faint  = "#7f877f"
+rule       = "#2c322d"
+rule-faint = "#1f2420"
+code-bg    = "#1a1e1b"
+accent     = "#9dc982"
+link       = "#8ec3dc"
+mark       = "#34432a"
+
 # Reference pages beside the log. Opt-in: remove this section and the site has
 # no Reference tab.
 [[link]]

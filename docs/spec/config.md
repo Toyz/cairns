@@ -67,11 +67,51 @@ sub-path and from a domain root without re-rendering.
 
 `theme` names a built-in theme, or a path to one.
 
+`stylesheet` names a CSS file of the project's own. It is appended to the
+site's stylesheet, after everything built in and after `[colors]`, so any rule
+in it wins. A stylesheet named and not found is an error rather than a warning:
+the site would build, look wrong, and give no reason.
+
 `readme` names a markdown file rendered as the site's About page. A worklog
 without one tells a visitor what was found out but never what the project *is*.
 Its relative links are rewritten to point into `project.repository`, since a
 link to `docs/spec/entry.md` means a file in the repo and there is no such page
 on the site. Without a `repository` they are left alone, and will not resolve.
+
+## `[colors]`
+
+The site's palette, overridden a token at a time.
+
+```toml
+[colors]
+accent = "#c2410c"
+
+[colors.dark]
+accent = "#f08c5a"
+paper  = "#101014"
+```
+
+A token in `[colors]` applies in both light and dark. `[colors.light]` and
+`[colors.dark]` apply in one scheme only, and win over `[colors]` there. The
+common wish is one accent colour, set once; a colour that only reads well on a
+dark page goes under `dark`.
+
+The tokens are the ones the stylesheet is written in:
+
+| token | what it colours |
+| --- | --- |
+| `paper`, `paper-sunk` | the page, and the panels and hover fills set into it |
+| `ink`, `ink-soft`, `ink-faint` | text, from body to the quietest labels |
+| `rule`, `rule-faint` | dividers and borders |
+| `link`, `accent` | links, and the marks of the current place |
+| `code-bg`, `mark` | code blocks, and highlighted or selected text |
+| `code-keyword`, `code-string`, `code-comment`, `code-number`, `code-function`, `code-type` | highlighted code |
+
+A token not in this list is an error, so a misspelt one is reported rather
+than silently never appearing. A value is any CSS colour, and one containing
+`;`, `{`, `}`, `<` or `>` is refused, because it lands inside a stylesheet.
+
+For anything a token cannot reach, use `site.stylesheet`.
 
 ## `[index]`
 

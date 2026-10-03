@@ -1,0 +1,43 @@
+%YAML 1.2
+---
+# TOML, which syntect's bundled grammars do not cover. Small on purpose: it
+# colours what a reader scans for - tables, keys, strings, comments - and
+# leaves the rest plain.
+name: TOML
+file_extensions: [toml]
+scope: source.toml
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.toml
+    - match: '^\s*(\[\[?)([^\]]*)(\]\]?)'
+      captures:
+        1: punctuation.definition.table.toml
+        2: entity.name.section.toml
+        3: punctuation.definition.table.toml
+    - match: '^\s*([A-Za-z0-9_."-]+)\s*(=)'
+      captures:
+        1: entity.name.tag.key.toml
+        2: keyword.operator.assignment.toml
+    - match: '"""'
+      push: triple
+    - match: '"'
+      push: double
+    - match: "'[^']*'"
+      scope: string.quoted.single.toml
+    - match: '\b(true|false)\b'
+      scope: constant.language.toml
+    - match: '\b\d{4}-\d{2}-\d{2}([T ][0-9:.]+(Z|[+-]\d{2}:\d{2})?)?\b'
+      scope: constant.numeric.date.toml
+    - match: '[+-]?\b(0x[0-9A-Fa-f_]+|\d[\d_]*(\.\d+)?([eE][+-]?\d+)?)\b'
+      scope: constant.numeric.toml
+  double:
+    - meta_scope: string.quoted.double.toml
+    - match: '\\.'
+      scope: constant.character.escape.toml
+    - match: '"'
+      pop: true
+  triple:
+    - meta_scope: string.quoted.triple.toml
+    - match: '"""'
+      pop: true

@@ -7,9 +7,12 @@
   if (!list) return;
 
   var rows = Array.prototype.slice.call(list.querySelectorAll("li")); // newest first
+  // The entries come grouped under a heading per day. A day with nothing left
+  // in it after filtering goes too, or the page is a column of empty dates.
+  var days = Array.prototype.slice.call(list.querySelectorAll(".day"));
   var box = document.getElementById("q");
   var chips = Array.prototype.slice.call(document.querySelectorAll(".chip[data-area]"));
-  var sorters = Array.prototype.slice.call(document.querySelectorAll(".sort button[data-sort]"));
+  var sorters = Array.prototype.slice.call(document.querySelectorAll("button[data-sort]"));
   var status = document.getElementById("status");
 
   var picked = new Set();
@@ -35,11 +38,16 @@
       });
   }
 
+  // Each order is the other reversed, at both levels: the days, and the
+  // entries within each day. So a change of order is one reversal of both.
   function reorder() {
-    var wanted = order === "old" ? rows.slice().reverse() : rows;
-    var fragment = document.createDocumentFragment();
-    wanted.forEach(function (row) { fragment.appendChild(row); });
-    list.appendChild(fragment);
+    days.forEach(function (day) {
+      var inner = day.querySelector("ul");
+      var items = Array.prototype.slice.call(inner.children).reverse();
+      items.forEach(function (item) { inner.appendChild(item); });
+    });
+    days.reverse();
+    days.forEach(function (day) { list.appendChild(day); });
   }
 
   function apply() {
@@ -53,6 +61,9 @@
       var show = byArea && (query === "" || hay.indexOf(query) !== -1);
       row.hidden = !show;
       if (show) shown++;
+    });
+    days.forEach(function (day) {
+      day.hidden = !day.querySelector("li:not([hidden])");
     });
 
     if (status) {
@@ -101,6 +112,9 @@
   // pill on an entry page, which links back here with one already chosen.
   function fromHash() {
     var hash = location.hash.replace(/^#/, "");
+    // `#d2026-10-02` is a day in the list, from the activity strip - a place to
+    // scroll to, not a change of filters.
+    if (/^d\d/.test(hash)) return;
     picked.clear();
     var wanted = "new";
     hash.split("&").forEach(function (part) {
@@ -122,6 +136,61 @@
     });
     apply();
   }
+
+  // Density is a reader's preference rather than a view of the log, so it is
+  // remembered in this browser instead of carried in the link.
+  var densities = Array.prototype.slice.call(document.querySelectorAll("button[data-density]"));
+  function density(which) {
+    list.classList.toggle("compact", which === "compact");
+    densities.forEach(function (button) {
+      button.setAttribute("aria-pressed", button.dataset.density === which ? "true" : "false");
+    });
+  }
+  densities.forEach(function (button) {
+    button.addEventListener("click", function () {
+      density(button.dataset.density);
+      try { localStorage.setItem("cairns-density", button.dataset.density); } catch (e) {}
+    });
+  });
+  try {
+    var saved = localStorage.getItem("cairns-density");
+    if (saved) density(saved);
+  } catch (e) {}
+
+  // `/` to search, `j` and `k` (or the arrows) to move through what is shown,
+  // Enter to open - the link already does that. Escape leaves the search box.
+  function visibleRows() {
+    return Array.prototype.slice.call(list.querySelectorAll("li:not([hidden]) .row")).filter(
+      function (row) { return !row.closest(".day[hidden]"); }
+    );
+  }
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName);
+    if (typing) {
+      if (event.key === "Escape") event.target.blur();
+      if (event.key === "ArrowDown" && event.target === box) {
+        var first = visibleRows()[0];
+        if (first) { event.preventDefault(); first.focus(); }
+      }
+      return;
+    }
+    if (event.key === "/" && box) {
+      event.preventDefault();
+      box.focus();
+      return;
+    }
+    var step = { j: 1, ArrowDown: 1, k: -1, ArrowUp: -1 }[event.key];
+    if (!step) return;
+    var shown = visibleRows();
+    if (!shown.length) return;
+    var at = shown.indexOf(document.activeElement);
+    var next = at === -1 ? (step > 0 ? 0 : shown.length - 1) : at + step;
+    if (next < 0 || next >= shown.length) return;
+    event.preventDefault();
+    shown[next].focus();
+    shown[next].scrollIntoView({ block: "nearest" });
+  });
 
   // Arriving with a hash, and changing it without leaving the page.
   if (location.hash) fromHash();

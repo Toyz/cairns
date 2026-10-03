@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// `cairns.toml`. See `docs/spec/config.md`.
@@ -35,6 +36,82 @@ pub struct Config {
     /// about pages cairns makes.
     #[serde(default, rename = "link")]
     pub links: Vec<Link>,
+    /// The site's palette, overridden by name.
+    #[serde(default, skip_serializing_if = "Colors::is_empty")]
+    pub colors: Colors,
+}
+
+/// The colour tokens the site's stylesheet is written in. `[colors]` may set
+/// any of these and nothing else, so a typo is an error rather than a colour
+/// that silently never appears.
+pub const COLOR_TOKENS: &[&str] = &[
+    "paper",
+    "paper-sunk",
+    "ink",
+    "ink-soft",
+    "ink-faint",
+    "rule",
+    "rule-faint",
+    "link",
+    "accent",
+    "code-bg",
+    "mark",
+    "code-keyword",
+    "code-string",
+    "code-comment",
+    "code-number",
+    "code-function",
+    "code-type",
+];
+
+/// `[colors]`: tokens for both schemes, with `[colors.light]` and
+/// `[colors.dark]` for one scheme only.
+///
+/// Both-schemes is the plain table because the common wish is one accent
+/// colour, set once. A colour that only works on a dark page goes under
+/// `dark`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Colors {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub light: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dark: BTreeMap<String, String>,
+    #[serde(flatten)]
+    pub both: BTreeMap<String, String>,
+}
+
+impl Colors {
+    pub fn is_empty(&self) -> bool {
+        self.light.is_empty() && self.dark.is_empty() && self.both.is_empty()
+    }
+
+    fn validate(&self) -> Result<()> {
+        let scopes = [
+            ("colors", &self.both),
+            ("colors.light", &self.light),
+            ("colors.dark", &self.dark),
+        ];
+        for (scope, table) in scopes {
+            for (token, value) in table {
+                if !COLOR_TOKENS.contains(&token.as_str()) {
+                    return Err(Error::Config(format!(
+                        "[{scope}] has {token:?}, which is not a colour the site uses; \
+                         it knows {}",
+                        COLOR_TOKENS.join(", ")
+                    )));
+                }
+                // The value lands inside a stylesheet. Anything that could end
+                // the declaration is refused rather than escaped: no colour
+                // needs it.
+                if value.trim().is_empty() || value.contains([';', '{', '}', '<', '>', '\n']) {
+                    return Err(Error::Config(format!(
+                        "[{scope}] {token} = {value:?} is not a colour"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +150,10 @@ pub struct Site {
     /// can find out what the project is. Usually `README.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+    /// A stylesheet of the project's own, appended after the built-in one, so
+    /// anything in it wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stylesheet: Option<String>,
 }
 
 /// One link in the rail.
@@ -268,6 +349,7 @@ impl Config {
                 )));
             }
         }
+        self.colors.validate()?;
         for target in &self.targets {
             // The file is committed, so a literal here is a leaked credential
             // in the next push. Catching it now costs nothing.
@@ -352,6 +434,37 @@ mod tests {
     #[test]
     fn an_area_about_must_be_text() {
         assert!(Config::parse(&format!("{PROJECT}[area]\nspec = 3\n")).is_err());
+    }
+
+    #[test]
+    fn colours_read_for_both_schemes_and_for_each() {
+        let config = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[colors]\naccent = \"#c2410c\"\n\
+             [colors.dark]\naccent = \"#f08c5a\"\npaper = \"#101014\"\n"
+        ))
+        .unwrap();
+        assert_eq!(config.colors.both["accent"], "#c2410c");
+        assert_eq!(config.colors.dark["paper"], "#101014");
+        assert!(config.colors.light.is_empty());
+    }
+
+    #[test]
+    fn a_colour_the_site_does_not_use_is_refused_by_name() {
+        let error = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[colors]\naccnet = \"red\"\n"
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("\"accnet\""), "{error}");
+        assert!(error.to_string().contains("accent"), "{error}");
+    }
+
+    #[test]
+    fn a_colour_cannot_break_out_of_its_declaration() {
+        let error = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[colors]\naccent = \"red; }} body {{ display: none\"\n"
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("is not a colour"), "{error}");
     }
 
     #[test]

@@ -107,6 +107,9 @@ fn newest(root: &Path, config: &Config) -> Option<SystemTime> {
     if let Some(readme) = &config.site.readme {
         consider(root.join(readme));
     }
+    if let Some(stylesheet) = &config.site.stylesheet {
+        consider(root.join(stylesheet));
+    }
     if let Ok(entries) = std::fs::read_dir(root.join(&config.paths.entries)) {
         for entry in entries.flatten() {
             consider(entry.path());

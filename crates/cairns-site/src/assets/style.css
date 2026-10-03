@@ -26,6 +26,14 @@
   --code-bg: #f3f0e8;
   --mark: #fbeeb0;
 
+  /* Code, by what a token is rather than what language it is in. */
+  --code-keyword: #8a3f8f;
+  --code-string: #3d7a3a;
+  --code-comment: #8f897b;
+  --code-number: #b0571c;
+  --code-function: #1f5f8b;
+  --code-type: #8a6a00;
+
   --step--1: 0.8125rem;
   --step-0: 1.0625rem;
   --step-1: 1.1875rem;
@@ -57,6 +65,12 @@
     --accent: #e0845c;
     --code-bg: #202024;
     --mark: #4c421f;
+    --code-keyword: #c99be0;
+    --code-string: #a3c98a;
+    --code-comment: #6f6b62;
+    --code-number: #e8a46a;
+    --code-function: #8cb8e3;
+    --code-type: #e2c46e;
   }
 }
 
@@ -252,8 +266,22 @@ main { min-width: 0; }
   .rail-nav { flex-direction: row; flex-wrap: wrap; gap: var(--space-2); }
   .rail-nav a { border-left: 0; padding-left: 0; }
   .rail-nav a[aria-current="page"] { border-bottom: 2px solid var(--accent); }
-  .filters .chip { width: auto; }
-  .filters { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
+  /* One row that scrolls sideways. Wrapped, eighteen areas were a wall
+     between the masthead and the first entry. The fade says there is more. */
+  .filters .chip { width: auto; flex: 0 0 auto; }
+  .filters {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: var(--space-2);
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+            mask-image: linear-gradient(to right, #000 85%, transparent);
+  }
+  .filters::-webkit-scrollbar { display: none; }
+  .filters .rail-label { flex: 0 0 auto; width: auto; margin: 0 var(--space-1) 0 0; }
   .rail-links {
   display: flex;
   flex-direction: column;
@@ -323,6 +351,36 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
 .search:focus-within svg { color: var(--accent); }
 
 /* Two words you can click, rather than a segmented control. */
+/* Two icons in one quiet frame; the one in use is filled. */
+.switch {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--paper-sunk);
+}
+.switch button {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.switch button svg { width: 1rem; height: 1rem; }
+.switch button:hover { color: var(--ink); }
+.switch button[aria-pressed="true"] {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--rule-faint), 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .sort { display: flex; gap: var(--space-2); flex: 0 0 auto; }
 .sort button {
   padding: 0;
@@ -365,12 +423,38 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
 .entries { list-style: none; margin: 0; padding: 0; }
 .entries li + li { border-top: 1px solid var(--rule-faint); }
 
+/* A heading per day, held at the top while its entries scroll under it, so a
+   reader three screens into a long day still knows which one it is. */
+.day + .day { margin-top: var(--space-3); }
+.day-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0;
+  padding: var(--space-1) 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-soft);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.day-count {
+  color: var(--ink-faint);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
 /* The whole row is the target. A title-only hit area in a list of summaries is
    a list that is annoying to use. */
 .row {
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-2);
   margin: 0 calc(var(--space-2) * -1);
   border-radius: var(--radius);
   color: inherit;
@@ -382,11 +466,11 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
    footnote - but quiet, so the title still leads. */
 .row .no {
   flex: 0 0 2.5rem;
-  padding-top: 0.1rem;
+  padding-top: 0.15rem;
   color: var(--ink-faint);
   font-family: var(--font-text);
   font-variant-numeric: tabular-nums;
-  font-size: var(--step-1);
+  font-size: var(--step-0);
   line-height: 1.35;
   text-align: right;
 }
@@ -396,32 +480,142 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
 .row-title {
   display: block;
   font-family: var(--font-text);
-  font-size: var(--step-2);
+  font-size: var(--step-1);
   font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
   color: var(--ink);
 }
 .row:hover .row-title { text-decoration: underline; text-decoration-thickness: 1px; }
 
+/* Two lines at most. The summary is there to tell rows apart, and one that
+   runs to five lines makes the list a column of paragraphs. */
 .row .summary {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
   font-family: var(--font-text);
-  margin-top: var(--space-1);
+  margin-top: 0.3rem;
   color: var(--ink-soft);
-  font-size: var(--step-0);
-  line-height: 1.6;
+  font-size: 0.95rem;
+  line-height: 1.55;
 }
 .row .meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-top: var(--space-1);
+  margin-top: 0.3rem;
   color: var(--ink-faint);
   font-family: var(--font-ui);
   font-size: var(--step--1);
 }
 .row .meta time { font-variant-numeric: tabular-nums; }
+
+/* A row reached by keyboard is the row you are on. */
+.row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--paper-sunk);
+}
+.row:focus-visible .no { color: var(--accent); }
+
+/* Compact: one line an entry, for a reader who knows what they are looking
+   for and wants all of them in view. The full title is on hover. */
+.days.compact .day + .day { margin-top: var(--space-2); }
+.days.compact .row { padding: 0.4rem var(--space-2); align-items: baseline; }
+.days.compact .row .summary,
+.days.compact .row .meta { display: none; }
+.days.compact .row .no { font-size: var(--step--1); padding-top: 0; font-family: var(--font-ui); }
+.days.compact .row-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--step-0);
+  font-weight: 500;
+}
+.days.compact .entries li + li { border-top-color: transparent; }
+
+
+/* The log at a glance ----------------------------------------------------- */
+
+.glance { font-family: var(--font-ui); font-size: var(--step--1); }
+.glance-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3);
+}
+.glance-stats div {
+  padding: var(--space-1) 0.75rem;
+  border: 1px solid var(--rule-faint);
+  border-radius: var(--radius);
+}
+.glance-stats dt {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+.glance-stats dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: var(--step-3);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.glance-stats dd a { color: var(--accent); text-decoration: none; }
+.glance-stats dd a:hover { text-decoration: underline; }
+
+/* Entries over time. Each bar is a day (or a week, or a month, for a long
+   log) and goes to that day in the list. */
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 4.5rem;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--rule);
+}
+.spark > * { flex: 1 1 0; min-width: 1px; }
+.spark a {
+  height: var(--h);
+  background: var(--ink-faint);
+  border-radius: 1px 1px 0 0;
+  opacity: 0.55;
+}
+.spark a:hover { background: var(--accent); opacity: 1; }
+.spark span { height: 1px; }
+.spark-axis {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.3rem 0 var(--space-3);
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.keys { margin: 0; color: var(--ink-faint); font-size: 0.75rem; }
+kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  margin: 0 0.15em;
+  padding: 0 0.3em;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 0.25rem;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+/* Below three columns the glance would sit above the list, pushing the first
+   entry down for numbers that matter less than it. It goes; the open count
+   is in the nav anyway. */
+@media (max-width: 86rem) {
+  .contents-rail:has(.glance) { display: none; }
+}
 
 .empty { color: var(--ink-faint); padding: var(--space-4) 0; }
 
@@ -501,6 +695,17 @@ h2.section a:hover { color: var(--accent); }
   }
   .rail { order: -1; }
   main { order: 1; }
+}
+
+/* Two columns, three things to place. Left to auto-placement, the contents box
+   took the second column of the first row and the article wrapped into the
+   first column of the second - a 14rem strip under the rail, on every laptop
+   between 62rem and 86rem wide. The rail spans both rows; contents and the
+   article share the reading column, one above the other. */
+@media (min-width: 62.0625rem) and (max-width: 86rem) {
+  .rail { grid-column: 1; grid-row: 1 / span 2; }
+  .contents-rail, main { grid-column: 2; }
+  .contents-rail { align-self: start; }
 }
 
 /* One entry --------------------------------------------------------------- */
@@ -652,6 +857,21 @@ p code, li code, td code, .summary code {
   border-radius: 0.25rem;
 }
 pre code { background: none; padding: 0; }
+
+/* Highlighted code. A handful of scopes carry colour; everything else - the
+   punctuation, the operators, the plain identifiers - stays ink, so the
+   colour means something when it appears. */
+.hl-comment { color: var(--code-comment); font-style: italic; }
+.hl-string { color: var(--code-string); }
+.hl-constant.hl-numeric, .hl-constant.hl-language,
+.hl-constant.hl-character { color: var(--code-number); }
+.hl-keyword, .hl-storage { color: var(--code-keyword); }
+.hl-keyword.hl-operator { color: inherit; }
+.hl-entity.hl-name.hl-function, .hl-support.hl-function,
+.hl-entity.hl-name.hl-tag, .hl-markup.hl-heading { color: var(--code-function); }
+.hl-storage.hl-type, .hl-support.hl-type, .hl-entity.hl-name.hl-type,
+.hl-entity.hl-name.hl-class, .hl-entity.hl-name.hl-struct,
+.hl-entity.hl-name.hl-section { color: var(--code-type); }
 
 blockquote {
   margin: 0 0 var(--space-3);

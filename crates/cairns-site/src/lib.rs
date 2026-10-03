@@ -6,6 +6,7 @@
 //! target and a local build the same code path.
 
 pub mod feed;
+mod highlight;
 pub mod html;
 pub mod icon;
 
@@ -52,7 +53,7 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     let mut rendered = Rendered::default();
 
     rendered.push("log.json", serde_json::to_vec_pretty(log)?);
-    rendered.push("style.css", include_str!("assets/style.css"));
+    rendered.push("style.css", stylesheet(log));
     rendered.push("search.js", include_str!("assets/search.js"));
     rendered.push("index.html", html::home(log));
     rendered.push("open/index.html", html::open_questions(log));
@@ -105,6 +106,41 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     rendered.push("search.json", serde_json::to_vec(&searchable)?);
 
     Ok(rendered)
+}
+
+/// The built-in stylesheet, then the project's colours, then the project's own
+/// stylesheet - each later one winning, in the order a reader would guess.
+///
+/// One file rather than three, because every page already asks for this one
+/// and an override that arrives in a second request paints a frame late.
+fn stylesheet(log: &Log) -> String {
+    let mut css = String::from(include_str!("assets/style.css"));
+    let colors = &log.colors;
+    let block = |table: &std::collections::BTreeMap<String, String>| {
+        table
+            .iter()
+            .map(|(token, value)| format!("    --{token}: {};\n", value.trim()))
+            .collect::<String>()
+    };
+    if !colors.is_empty() {
+        css.push_str("\n/* [colors] from cairns.toml */\n");
+        if !colors.both.is_empty() {
+            css.push_str(&format!(":root {{\n{}}}\n", block(&colors.both)));
+        }
+        for (scheme, table) in [("light", &colors.light), ("dark", &colors.dark)] {
+            if !table.is_empty() {
+                css.push_str(&format!(
+                    "@media (prefers-color-scheme: {scheme}) {{\n  :root {{\n{}  }}\n}}\n",
+                    block(table)
+                ));
+            }
+        }
+    }
+    if let Some(own) = &log.stylesheet {
+        css.push_str("\n/* site.stylesheet from cairns.toml */\n");
+        css.push_str(own);
+    }
+    css
 }
 
 /// Render the index - `WORKLOG.md` - from the log.
@@ -224,6 +260,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn colours_and_a_stylesheet_follow_the_built_in_one() {
+        let mut built = simple();
+        built.colors.both.insert("accent".into(), "#c2410c".into());
+        built.colors.dark.insert("paper".into(), "#101014".into());
+        built.stylesheet = Some("body { letter-spacing: 0.01em; }".into());
+        let css = stylesheet(&built);
+        let builtin = css.find("--accent: #9c4221").unwrap();
+        let mine = css.find("--accent: #c2410c").unwrap();
+        let dark = css
+            .find("@media (prefers-color-scheme: dark) {\n  :root {\n    --paper: #101014;")
+            .unwrap();
+        let own = css.find("letter-spacing: 0.01em").unwrap();
+        // Each later one wins, so the order is the contract.
+        assert!(builtin < mine && mine < dark && dark < own, "{css}");
+    }
+
+    #[test]
+    fn without_colours_the_stylesheet_is_the_built_in_one() {
+        assert_eq!(stylesheet(&simple()), include_str!("assets/style.css"));
+    }
+
     fn entry_page_with_files(files: &str) -> String {
         let built = log(&[(
             &format!("number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec\nfiles: {files}"),
@@ -309,10 +367,13 @@ mod tests {
         )]);
         let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
         let page = html::entry(&built, 0, &by_number);
+        // The title's own tag, not any `<script>`: the page carries one of
+        // its own, for the arrow keys.
         assert!(
-            !page.contains("<script>"),
+            !page.contains("<script> & co"),
             "an unescaped tag reached the page"
         );
+        assert!(page.contains("&lt;script&gt; &amp; co"));
         assert!(page.contains("&quot;quoted&quot;"));
     }
 

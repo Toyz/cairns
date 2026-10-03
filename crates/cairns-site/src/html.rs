@@ -31,7 +31,10 @@ fn options() -> Options {
 
 fn markdown(text: &str) -> String {
     let mut out = String::new();
-    html::push_html(&mut out, Parser::new_ext(text, options()));
+    html::push_html(
+        &mut out,
+        crate::highlight::code_blocks(Parser::new_ext(text, options())).into_iter(),
+    );
     // A wide table is the one thing allowed to scroll sideways, and only
     // inside its own box - never the page.
     out.replace("<table>", "<div class=\"table-scroll\"><table>")
@@ -58,11 +61,28 @@ fn prose(entry: &LogEntry) -> &str {
 
 /// Markdown reduced to its text, for anywhere markup would be shown literally
 /// rather than rendered - a link preview, a feed summary, a list blurb.
+///
+/// A reference, `[[358]]`, reads as `#358`: the brackets were printed as they
+/// were written, in every index blurb and link preview, and a bare number in a
+/// sentence does not say it is one.
 pub fn plain_md(text: &str) -> String {
     use pulldown_cmark::Event;
+    let text = cairns_core::entry::rewrite_references(text, &|reference| {
+        Some(format!("cairns:{}", reference.number))
+    });
     let mut out = String::new();
-    for event in Parser::new_ext(text, options()) {
+    // The number a reference link is labelled with, while inside one.
+    let mut reference: Option<String> = None;
+    for event in Parser::new_ext(&text, options()) {
         match event {
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                reference = dest_url.strip_prefix("cairns:").map(str::to_string);
+            }
+            Event::End(TagEnd::Link) => reference = None,
+            Event::Text(text) if reference.as_deref() == Some(&*text) => {
+                out.push('#');
+                out.push_str(&text);
+            }
             Event::Text(text) | Event::Code(text) => out.push_str(&text),
             Event::SoftBreak | Event::HardBreak => out.push(' '),
             _ => {}
@@ -285,7 +305,7 @@ fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, Strin
     }
 
     let mut out = String::new();
-    html::push_html(&mut out, events.into_iter());
+    html::push_html(&mut out, crate::highlight::code_blocks(events).into_iter());
     let out = out
         .replace("<table>", "<div class=\"table-scroll\"><table>")
         .replace("</table>", "</table></div>");
@@ -538,42 +558,84 @@ pub fn home(log: &Log) -> String {
     );
     // Newest first is what someone checking back wants, and it is the order the
     // page ships in so it holds with scripting off.
-    body.push_str(
-        "<div class=\"sort\" role=\"group\" aria-label=\"Order\">\n\
-         <button data-sort=\"new\" aria-pressed=\"true\">Newest</button>\n\
-         <button data-sort=\"old\" aria-pressed=\"false\">Oldest</button>\n\
-         </div>\n</div>\n<p id=\"status\"></p>\n<ul class=\"entries\" id=\"entries\">\n",
+    //
+    // Icons rather than words: four words beside the search field read as a
+    // second toolbar. Each keeps its name for a screen reader and on hover.
+    let icon = |paths: &str| {
+        format!(
+            "<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\" fill=\"none\" \
+             stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" \
+             stroke-linejoin=\"round\">{paths}</svg>"
+        )
+    };
+    let _ = writeln!(
+        body,
+        "<div class=\"switch\" role=\"group\" aria-label=\"Order\">\n\
+         <button data-sort=\"new\" aria-pressed=\"true\" aria-label=\"Newest first\" \
+         title=\"Newest first\">{newest}</button>\n\
+         <button data-sort=\"old\" aria-pressed=\"false\" aria-label=\"Oldest first\" \
+         title=\"Oldest first\">{oldest}</button>\n</div>\n\
+         <div class=\"switch\" role=\"group\" aria-label=\"Density\">\n\
+         <button data-density=\"detailed\" aria-pressed=\"true\" aria-label=\"Detailed\" \
+         title=\"Detailed\">{detailed}</button>\n\
+         <button data-density=\"compact\" aria-pressed=\"false\" aria-label=\"Compact\" \
+         title=\"Compact\">{compact}</button>\n</div>\n</div>\n\
+         <p id=\"status\"></p>\n<div class=\"days\" id=\"entries\">",
+        // An arrow beside lines that shrink the way it points.
+        newest = icon("<path d=\"M4 2.5v11M1.75 11.25 4 13.5l2.25-2.25M9 3.5h5.5M9 8h4M9 12.5h2.5\"/>"),
+        oldest = icon("<path d=\"M4 13.5v-11M1.75 4.75 4 2.5l2.25 2.25M9 3.5h2.5M9 8h4M9 12.5h5.5\"/>"),
+        // A title over a summary, twice; and four plain lines.
+        detailed = icon(
+            "<path d=\"M2 3h12M2 6h8\"/><path d=\"M2 10.5h12M2 13.5h8\" />"
+        ),
+        compact = icon("<path d=\"M2 3h12M2 6.33h12M2 9.67h12M2 13h12\"/>"),
     );
 
-    for entry in log.entries.iter().rev() {
+    // Under a heading per day rather than a date on every row. A log that runs
+    // to hundreds of entries is written a dozen a day, and the same date
+    // printed twelve times over is noise between titles. A day is a run of
+    // entries in number order, so a date out of sequence shows up as its own
+    // short group instead of being silently folded into another.
+    let newest_first: Vec<&LogEntry> = log.entries.iter().rev().collect();
+    for day in newest_first.chunk_by(|a, b| a.date == b.date) {
+        let date = day[0].date;
         let _ = writeln!(
             body,
-            "<li data-n=\"{n}\" data-areas=\"{slugs}\">\n\
-             <a class=\"row\" href=\"{path}/\">\n\
-             <span class=\"no\">{n}</span>\n<span class=\"row-main\">\n\
-             <span class=\"row-title\">{title}</span>",
-            n = entry.number,
-            slugs = escape(&entry.areas.join(" ")),
-            path = escape(&path_of(entry)),
-            title = escape(&entry.title)
+            "<section class=\"day\" id=\"d{date}\">\n<h2 class=\"day-label\"><time datetime=\"{date}\">{long}</time>\
+             <span class=\"day-count\">{count}</span></h2>\n<ul class=\"entries\">",
+            long = long_date(date),
+            count = day.len()
         );
-        if let Some(summary) = &entry.summary {
+        for entry in day {
             let _ = writeln!(
                 body,
-                "<span class=\"summary\">{}</span>",
-                escape(&plain_md(summary))
+                "<li data-n=\"{n}\" data-areas=\"{slugs}\">\n\
+                 <a class=\"row\" href=\"{path}/\">\n\
+                 <span class=\"no\">{n}</span>\n<span class=\"row-main\">\n\
+                 <span class=\"row-title\" title=\"{title}\">{title}</span>",
+                n = entry.number,
+                slugs = escape(&entry.areas.join(" ")),
+                path = escape(&path_of(entry)),
+                title = escape(&entry.title)
+            );
+            if let Some(summary) = &entry.summary {
+                let _ = writeln!(
+                    body,
+                    "<span class=\"summary\">{}</span>",
+                    escape(&plain_md(summary))
+                );
+            }
+            let _ = writeln!(
+                body,
+                "<span class=\"meta\"><span class=\"areas\">{areas}</span></span>\n\
+                 </span>\n</a>\n</li>",
+                areas = escape(&entry.areas.join(" \u{00b7} "))
             );
         }
-        let _ = writeln!(
-            body,
-            "<span class=\"meta\"><time datetime=\"{date}\">{date}</time>\
-             <span class=\"areas\">{areas}</span></span>\n</span>\n</a>\n</li>",
-            date = entry.date,
-            areas = escape(&entry.areas.join(" \u{00b7} "))
-        );
+        body.push_str("</ul>\n</section>\n");
     }
 
-    body.push_str("</ul>\n<script src=\"search.js\" defer></script>\n");
+    body.push_str("</div>\n<script src=\"search.js\" defer></script>\n");
 
     let description = if log.project.description.is_empty() {
         format!("{} entries.", log.entries.len())
@@ -588,9 +650,127 @@ pub fn home(log: &Log) -> String {
         "./",
         "entries",
         &chips,
-        "",
+        &glance(log),
         &body,
     )
+}
+
+/// The log at a glance, beside the list: how much there is, how much is still
+/// open, and when it was written.
+///
+/// A list of three hundred entries says nothing about its own shape. Whether a
+/// log is alive, whether it came in one burst or a steady drip, and how much of
+/// it is unfinished are the first things a visitor wants to know, and none of
+/// them could be read off the page.
+fn glance(log: &Log) -> String {
+    let (Some(first), Some(last)) = (log.entries.first(), log.entries.last()) else {
+        return String::new();
+    };
+    let open = log
+        .entries
+        .iter()
+        .filter(|entry| entry.still_unknown.is_some() && entry.resolved_by.is_empty())
+        .count();
+
+    let mut out = String::from(
+        "<div class=\"glance\">\n<p class=\"rail-label\">This log</p>\n<dl class=\"glance-stats\">\n",
+    );
+    let _ = writeln!(
+        out,
+        "<div><dt>Entries</dt><dd>{}</dd></div>\n\
+         <div><dt>Open</dt><dd><a href=\"open/\">{open}</a></dd></div>",
+        log.entries.len()
+    );
+    out.push_str("</dl>\n");
+
+    // One bar per day across the whole span, empty days included - a gap is
+    // part of the shape. A span too long for a bar a day is drawn by week, or
+    // by month, so the strip stays readable rather than becoming a smear.
+    let start = day_number(first.date.min(last.date));
+    let end = day_number(first.date.max(last.date));
+    let span = end - start + 1;
+    let width = match span {
+        ..=120 => 1,
+        121..=730 => 7,
+        _ => 30,
+    };
+    let buckets = ((span + width - 1) / width) as usize;
+    let mut counts = vec![0usize; buckets];
+    let mut firsts: Vec<Option<cairns_core::Date>> = vec![None; buckets];
+    for entry in &log.entries {
+        let at = ((day_number(entry.date) - start) / width) as usize;
+        if let Some(count) = counts.get_mut(at) {
+            *count += 1;
+            let first_day = &mut firsts[at];
+            if first_day.is_none_or(|day| entry.date < day) {
+                *first_day = Some(entry.date);
+            }
+        }
+    }
+    let busiest = counts.iter().copied().max().unwrap_or(1).max(1);
+    let unit = match width {
+        1 => "day",
+        7 => "week",
+        _ => "month",
+    };
+    let _ = writeln!(
+        out,
+        "<div class=\"spark\" role=\"img\" aria-label=\"Entries per {unit}, busiest {busiest}\">"
+    );
+    for (count, day) in counts.iter().zip(&firsts) {
+        match day {
+            Some(day) => {
+                let label = if width == 1 {
+                    format!("{}: {count}", long_date(*day))
+                } else {
+                    format!("{unit} of {}: {count}", long_date(*day))
+                };
+                let _ = writeln!(
+                    out,
+                    "<a href=\"#d{day}\" style=\"--h:{pct}%\" title=\"{label}\"></a>",
+                    pct = (count * 100).div_ceil(busiest).max(4),
+                    label = escape(&label)
+                );
+            }
+            None => out.push_str("<span></span>\n"),
+        }
+    }
+    let _ = writeln!(
+        out,
+        "</div>\n<p class=\"spark-axis\"><span>{}</span><span>{}</span></p>",
+        short_date(first.date.min(last.date)),
+        short_date(first.date.max(last.date))
+    );
+    out.push_str(
+        "<p class=\"keys\"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move \
+         <kbd>\u{21b5}</kbd> open</p>\n</div>\n",
+    );
+    out
+}
+
+/// Days since an arbitrary epoch, for spacing dates apart. Howard Hinnant's
+/// `days_from_civil`, the inverse of what `Date` already carries.
+fn day_number(date: cairns_core::Date) -> i64 {
+    let year = i64::from(date.year) - i64::from(date.month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let month = i64::from(date.month);
+    let doy =
+        (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + i64::from(date.day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe
+}
+
+/// `2 Oct 2026`.
+fn short_date(date: cairns_core::Date) -> String {
+    let long = long_date(date);
+    let mut parts = long.splitn(3, ' ');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(day), Some(month), Some(year)) => {
+            format!("{day} {} {year}", month.get(..3).unwrap_or(month))
+        }
+        _ => long,
+    }
 }
 
 /// More files than this and the list folds away behind its count.
@@ -654,6 +834,28 @@ fn files_html(files: &[String], links: &Links<'_>) -> String {
     )
 }
 
+/// `2 October 2026`. Unambiguous in every locale, which `10/02` is not.
+fn long_date(date: cairns_core::Date) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    match MONTHS.get(usize::from(date.month).wrapping_sub(1)) {
+        Some(month) => format!("{} {month} {}", date.day, date.year),
+        None => date.to_string(),
+    }
+}
+
 /// One entry, with its corrections, its open question, and its neighbours.
 pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> String {
     let this = &log.entries[at];
@@ -710,9 +912,24 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
             let _ = writeln!(
                 body,
                 "<p>Documented in {}.</p>",
+                // The page that rests on this entry is one click away, or
+                // should be; a name alone sent the reader off to find it.
                 this.documented_by
                     .iter()
-                    .map(|title| escape(title))
+                    .map(
+                        |title| match log.docs.iter().find(|doc| &doc.title == title) {
+                            // The docs root's own README is the docs index.
+                            Some(doc) if doc.slug.is_empty() => {
+                                format!("<a href=\"../docs/\">{}</a>", escape(title))
+                            }
+                            Some(doc) => format!(
+                                "<a href=\"../docs/{}/\">{}</a>",
+                                escape(&doc.slug),
+                                escape(title)
+                            ),
+                            None => escape(title),
+                        }
+                    )
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -769,6 +986,14 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         );
     }
     body.push_str("</nav>\n");
+    // The arrow keys walk the log, the way the pager does. Inline because it
+    // is four lines and a request for it would cost more than it does.
+    body.push_str(
+        "<script>document.addEventListener(\"keydown\",function(e){\
+         if(e.metaKey||e.ctrlKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;\
+         var a=document.querySelector(e.key===\"ArrowLeft\"?\".pager .prev\":e.key===\"ArrowRight\"?\".pager .next\":null);\
+         if(a)location.href=a.href;});</script>\n",
+    );
 
     // Sections and their subsections both, because an entry long enough to
     // want a contents list is long enough for its subsections to be where the

@@ -595,6 +595,14 @@ fn build_log(
             Err(problem) => eprintln!("cairns: {path}: {problem}"),
         }
     }
+    // A stylesheet named and missing is an error, not a warning: the site would
+    // build, look wrong, and say nothing about why.
+    if let Some(path) = &config.site.stylesheet {
+        built.stylesheet = Some(
+            std::fs::read_to_string(root.join(path))
+                .map_err(|problem| format!("{path}: {problem}"))?,
+        );
+    }
     Ok(built)
 }
 

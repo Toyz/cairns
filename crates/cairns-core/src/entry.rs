@@ -215,9 +215,34 @@ pub fn fields(text: &str) -> std::result::Result<BTreeMap<String, String>, Strin
         let (key, value) = line
             .split_once(':')
             .ok_or_else(|| format!("front matter line {line:?} has no `key: value`"))?;
-        fields.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+        fields.insert(
+            key.trim().to_ascii_lowercase(),
+            unquote(value.trim()).to_string(),
+        );
     }
     Ok(fields)
+}
+
+/// A value wrapped in one pair of matching quotes, without them.
+///
+/// The subset never quotes, but writers do - a title with a colon or a
+/// semicolon in it looks like it needs protecting, and a model writing front
+/// matter quotes it on reflex. piney_apples had 103 of 360 titles quoted, and
+/// the quotes were printed on every one. A YAML reader strips them, so reading
+/// them as delimiters is also the reading the spec already promises agrees
+/// with YAML. Only a pair with no quote of the same kind inside comes off, so
+/// a title that merely starts and ends with quoted words keeps them.
+fn unquote(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+            && !inner.contains(quote)
+        {
+            return inner;
+        }
+    }
+    value
 }
 
 pub fn split_front_matter(text: &str) -> Option<(&str, &str)> {
@@ -310,6 +335,25 @@ mod tests {
             bytes: text.into_bytes(),
         })
         .expect("parses")
+    }
+
+    #[test]
+    fn a_quoted_value_loses_its_quotes() {
+        let fields = fields(
+            "title: \"Field 28's flag; the pilot\"\nsummary: 'One line'\n\
+             area: \"spec, core\"",
+        )
+        .unwrap();
+        assert_eq!(fields["title"], "Field 28's flag; the pilot");
+        assert_eq!(fields["summary"], "One line");
+        assert_eq!(list(&fields["area"]), ["spec", "core"]);
+    }
+
+    #[test]
+    fn a_value_that_only_starts_and_ends_with_quotes_keeps_them() {
+        let fields = fields("title: \"Kite\" and \"Black Rose\"\nother: 'tis Kite's'").unwrap();
+        assert_eq!(fields["title"], "\"Kite\" and \"Black Rose\"");
+        assert_eq!(fields["other"], "'tis Kite's'");
     }
 
     #[test]
