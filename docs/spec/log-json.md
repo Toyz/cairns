@@ -106,6 +106,14 @@ It is carried in the document rather than read by the renderer, so the site is
 still built from this file alone - and so anything ingesting a log gets the
 project's own description of itself along with its entries.
 
+**`still_unknown`** is the whole trailer as markdown - a sentence, or a list
+of questions - from the marker to the end of the entry.
+
+**`paths`** names the repository files the site has a page for in place of
+the file: `index` (`WORKLOG.md`), `entries` (`worklog`) and `readme`. A link
+in an entry or a reference page to one of them goes to that page - the entry
+list, or About - because the site has no such file to link to.
+
 **`extra`** holds any front matter key the spec does not define, passed through
 untouched, so a project can carry its own metadata without forking the format
 and without the tool needing to know what it means.

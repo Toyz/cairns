@@ -156,6 +156,20 @@ impl Links<'_> {
             return format!("{}{fragment}", self.site(&format!("docs/{}/", doc.slug)));
         }
 
+        // The files the site has a page for in place of the file: the index is
+        // the entry list, the entries directory is too, and the README is the
+        // About page. A link to them is a link to that page, repository or not.
+        let paths = &self.log.paths;
+        let trimmed = target.trim_end_matches('/');
+        if (!paths.index.is_empty() && trimmed == paths.index)
+            || (!paths.entries.is_empty() && trimmed == paths.entries)
+        {
+            return format!("{}{fragment}", self.site(""));
+        }
+        if self.log.readme.is_some() && paths.readme.as_deref() == Some(trimmed) {
+            return format!("{}{fragment}", self.site("about/"));
+        }
+
         match self.log.project.repository.as_deref() {
             Some(repo) => format!(
                 "{}/blob/HEAD/{target}{fragment}",
@@ -1063,7 +1077,7 @@ fn contents_nav(headings: &[Heading]) -> String {
         );
     }
     toc.push_str("</ol></nav>\n</details>\n");
-    toc.push_str(&open_when_wider("86rem"));
+    toc.push_str(&open_when_wider("62rem"));
     toc
 }
 
@@ -1456,7 +1470,10 @@ fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
                     && (doc.section == folder || doc.section.starts_with(&format!("{folder}/")))
             })
             .count();
-        let open = here == folder || here.starts_with(&format!("{folder}/"));
+        // A small reference is shown whole; a large one only down to the page
+        // being read.
+        let small = log.docs.iter().filter(|doc| !doc.is_index).count() <= 12;
+        let open = small || here == folder || here.starts_with(&format!("{folder}/"));
         let _ = writeln!(
             out,
             "<li class=\"folder\"><details{}><summary>{heading}<span class=\"count\">{inside}</span></summary>",
@@ -1513,11 +1530,25 @@ pub fn docs_index(log: &Log) -> String {
         .docs
         .iter()
         .find(|doc| doc.is_index && doc.slug.is_empty());
+    let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
     let mut body = String::from("<article>\n");
     let mut headings = Vec::new();
+    // Search, as the entry list and the open questions have: over every page's
+    // full text, from `docs/search.json`. The reference had none, so the only
+    // way to a page was knowing which section it was filed under.
+    let search = format!(
+        "<div class=\"toolbar\">\n<div class=\"search\">\n\
+         <svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\">\
+         <circle cx=\"7\" cy=\"7\" r=\"4.5\" fill=\"none\" stroke=\"currentColor\" \
+         stroke-width=\"1.5\"/><path d=\"M10.5 10.5 L14 14\" stroke=\"currentColor\" \
+         stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg>\n\
+         <input type=\"search\" id=\"q\" placeholder=\"Search {pages} pages\" \
+         autocomplete=\"off\" spellcheck=\"false\">\n</div>\n</div>\n<p id=\"status\"></p>\n"
+    );
     match root {
         Some(doc) => {
             let _ = writeln!(body, "<h1>{}</h1>", escape(&doc.title));
+            body.push_str(&search);
             let links = Links {
                 log,
                 from_dir: doc_dir(doc),
@@ -1530,20 +1561,65 @@ pub fn docs_index(log: &Log) -> String {
             };
             let (found, html) = markdown_with_headings(stripped, &links);
             headings = found;
-            body.push_str(&html);
+            // The project's own index page, hidden while a search is showing
+            // the pages that match, so the results are not under it.
+            let _ = writeln!(
+                body,
+                "<div class=\"doc-readme\" data-hide-on-search>{html}</div>"
+            );
         }
         None => {
             let _ = writeln!(body, "<h1>{}</h1>", escape(label));
-            let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
+            let pages: Vec<&DocPage> = log.docs.iter().filter(|doc| !doc.is_index).collect();
+            let sections = log
+                .docs
+                .iter()
+                .filter(|doc| doc.is_index && !doc.slug.is_empty())
+                .count();
+            let mut tally = String::new();
+            for status in [
+                cairns_core::Status::Solid,
+                cairns_core::Status::Partial,
+                cairns_core::Status::Guess,
+            ] {
+                let count = pages
+                    .iter()
+                    .filter(|doc| doc.status == Some(status))
+                    .count();
+                if count > 0 {
+                    if !tally.is_empty() {
+                        tally.push_str(" \u{00b7} ");
+                    }
+                    let _ = write!(tally, "{count} {}", status.name());
+                }
+            }
             let _ = writeln!(
                 body,
-                "<p class=\"lead\">{pages} pages: what is true, flatly. The log says \
-                 how it was found out.</p>"
+                "<p class=\"lead\">What is true now, page by page; the log says how it was \
+                 found out. {} {} in {} {}: {tally}.</p>",
+                pages.len(),
+                if pages.len() == 1 { "page" } else { "pages" },
+                sections.max(1),
+                if sections > 1 { "sections" } else { "section" },
             );
+            body.push_str(&search);
         }
     }
-    body.push_str(&sections(log, "", ""));
-    body.push_str("</article>\n");
+    // When the docs root has its own README, that page is the index - it
+    // already lists its pages, in its own words - and listing them again under
+    // it doubled the page. The rows are still there for search, and only shown
+    // while one is running.
+    let _ = writeln!(
+        body,
+        "<div class=\"days doc-index\" id=\"entries\" data-noun=\"pages\"{}>\n{}</div>",
+        if root.is_some() {
+            " data-show-on-search hidden"
+        } else {
+            ""
+        },
+        sections(log, "", "")
+    );
+    body.push_str("</article>\n<script src=\"search.js\" defer></script>\n");
 
     shell(
         log,
@@ -1570,39 +1646,73 @@ fn sections(log: &Log, within: &str, rel: &str) -> String {
         .iter()
         .filter(|doc| !doc.is_index && doc.section == within)
         .collect();
-    if !here.is_empty() {
-        out.push_str("<ul class=\"entries\">\n");
-        for doc in here {
-            out.push_str(&doc_row(doc, rel));
-        }
-        out.push_str("</ul>\n");
-    }
+    out.push_str(&doc_cards(&here, rel));
 
-    for index in log
+    // Every folder under this one is a section: named and introduced by its
+    // own README when it has one, by its directory when it does not. Only
+    // folders with a README used to be listed, so a tree like piney_apples',
+    // fifty-two pages in folders without one, had an index that listed none.
+    let mut folders: Vec<String> = log
         .docs
         .iter()
-        .filter(|doc| doc.is_index && doc.section == within && doc.slug != within)
-    {
-        let _ = writeln!(
-            out,
-            "<h2 class=\"section\"><a href=\"{rel}{}/\">{}</a></h2>",
-            escape(&index.slug),
-            escape(&index.title)
-        );
+        .filter_map(|doc| child_section(within, &doc.section))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    for folder in folders {
+        let index = log
+            .docs
+            .iter()
+            .find(|doc| doc.is_index && doc.slug == folder);
+        // Everything under the folder, however deep, under its one heading.
         let inside: Vec<&DocPage> = log
             .docs
             .iter()
-            .filter(|doc| !doc.is_index && doc.section == index.slug)
+            .filter(|doc| {
+                !doc.is_index
+                    && (doc.section == folder || doc.section.starts_with(&format!("{folder}/")))
+            })
             .collect();
-        if inside.is_empty() {
-            continue;
+        let heading = match index {
+            Some(index) => format!(
+                "<a href=\"{rel}{}/\">{}</a>",
+                escape(&index.slug),
+                escape(&index.title)
+            ),
+            None => escape(&folder_name(&folder)),
+        };
+        // Headed the way the entry list heads a day, so the two indexes read as
+        // one site rather than two.
+        let _ = writeln!(
+            out,
+            "<section class=\"day doc-section\">\n<h2 class=\"day-label\">{heading}\
+             <span class=\"day-count\">{}</span></h2>",
+            inside.len()
+        );
+        if let Some(lead) = index.and_then(|index| first_sentence_of(&index.body)) {
+            let _ = writeln!(
+                out,
+                "<p class=\"section-lead\">{}</p>",
+                escape(&plain_md(&lead))
+            );
         }
-        out.push_str("<ul class=\"entries\">\n");
-        for doc in inside {
-            out.push_str(&doc_row(doc, rel));
-        }
-        out.push_str("</ul>\n");
+        out.push_str(&doc_cards(&inside, rel));
+        out.push_str("</section>\n");
     }
+    out
+}
+
+/// Pages as rows - the entry list's rows, title, summary and a meta line - so a
+/// reader moving between the two indexes is on the same kind of page.
+fn doc_cards(pages: &[&DocPage], rel: &str) -> String {
+    if pages.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<ul class=\"entries doc-list\">\n");
+    for doc in pages {
+        out.push_str(&doc_row(doc, rel));
+    }
+    out.push_str("</ul>\n");
     out
 }
 
@@ -1611,42 +1721,35 @@ fn doc_dir(doc: &DocPage) -> &str {
 }
 
 fn doc_row(doc: &DocPage, rel: &str) -> String {
-    let mut row = String::new();
-    let _ = writeln!(
-        row,
-        "<li>\n<p class=\"meta\">{status}{cites}</p>\n\
-         <h3><a href=\"{rel}{slug}/\">{title}</a></h3>",
-        status = doc
-            .status
-            .map(|status| format!(
+    let summary = first_sentence_of(&doc.body)
+        .map(|summary| {
+            format!(
+                "<span class=\"summary\">{}</span>\n",
+                escape(&plain_md(&summary))
+            )
+        })
+        .unwrap_or_default();
+    let status = doc
+        .status
+        .map(|status| {
+            format!(
                 "<span class=\"status status--{0}\">{0}</span>",
                 status.name()
-            ))
-            .unwrap_or_default(),
-        cites = if doc.worklog.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "<span>from {}</span>",
-                doc.worklog
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
             )
-        },
+        })
+        .unwrap_or_default();
+    let evidence = match doc.worklog.len() {
+        0 => String::new(),
+        1 => "<span>from 1 entry</span>".to_string(),
+        n => format!("<span>from {n} entries</span>"),
+    };
+    format!(
+        "<li data-n=\"{slug}\">\n<a class=\"row\" href=\"{rel}{slug}/\">\n<span class=\"row-main\">\n\
+         <span class=\"row-title\">{title}</span>\n{summary}\
+         <span class=\"meta\">{status}{evidence}</span>\n</span>\n</a>\n</li>\n",
         slug = escape(&doc.slug),
         title = escape(&doc.title)
-    );
-    if let Some(summary) = first_sentence_of(&doc.body) {
-        let _ = writeln!(
-            row,
-            "<p class=\"summary\">{}</p>",
-            escape(&plain_md(&summary))
-        );
-    }
-    row.push_str("</li>\n");
-    row
+    )
 }
 
 /// The first sentence of a page, for the index blurb.
@@ -1661,9 +1764,11 @@ fn first_sentence_of(body: &str) -> Option<String> {
     if prose.is_empty() {
         return None;
     }
+    // A paragraph that leads into a list ends with a colon, and the colon
+    // is not the end of a sentence: "... side effects:." was the result.
     Some(match prose.find(". ") {
         Some(stop) => prose[..=stop].trim().to_string(),
-        None => prose.trim_end_matches('.').to_string() + ".",
+        None => prose.trim_end_matches(['.', ':', ';', ',']).to_string() + ".",
     })
 }
 
@@ -1677,42 +1782,55 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         .map(|entry| (entry.number, entry))
         .collect();
 
+    // The same head an entry has - a label above the title, then a line of
+    // pills - so a reference page reads as part of the same site. It had a
+    // bare title and a line of plain words, sitting higher than an entry's.
+    let label = log.docs_label.as_deref().unwrap_or("Reference");
+    let section = log
+        .docs
+        .iter()
+        .find(|other| other.is_index && other.slug == doc.section && !doc.is_index)
+        .map(|other| other.title.clone())
+        .or_else(|| (!doc.section.is_empty() && !doc.is_index).then(|| folder_name(&doc.section)));
     let mut body = String::from("<article>\n");
+    let _ = writeln!(
+        body,
+        "<p class=\"entry-number\">{}</p>",
+        match &section {
+            Some(section) => format!("{} \u{00b7} {}", escape(label), escape(section)),
+            None => escape(label),
+        }
+    );
     let _ = writeln!(body, "<h1>{}</h1>", escape(&doc.title));
 
     let _ = write!(body, "<p class=\"dateline\">");
-    if !doc.section.is_empty() {
-        let _ = write!(body, "<span>{}</span>", escape(&doc.section));
-    }
     if let Some(status) = doc.status {
         let _ = write!(
             body,
-            "<span class=\"status status--{0}\">{0}</span>",
+            "<span class=\"chip status status--{0}\">{0}</span>",
             status.name()
         );
     }
-    // The edge back to the evidence, which is the point of keeping both. As
-    // the entry's own `#19` rather than a pill each: a page resting on eleven
-    // entries wrapped two lines of pills under its title, louder than the page.
+    // The evidence: the entries this page rests on, as the same pills an
+    // entry's areas are, each with its title on hover.
     if !doc.worklog.is_empty() {
-        body.push_str("<span class=\"from\">from</span><span class=\"evidence\">");
+        body.push_str("<span class=\"from\">from</span>");
         for number in &doc.worklog {
             match by_number.get(number) {
                 Some(entry) => {
                     let _ = write!(
                         body,
-                        "<a href=\"{rel}{}-{}/\" title=\"{}\">#{number}</a>",
+                        "<a class=\"chip\" href=\"{rel}{}-{}/\" title=\"{}\">#{number}</a>",
                         entry.number,
                         escape(&entry.slug),
                         escape(&entry.title)
                     );
                 }
                 None => {
-                    let _ = write!(body, "<span>#{number}</span>");
+                    let _ = write!(body, "<span class=\"chip\">#{number}</span>");
                 }
             }
         }
-        body.push_str("</span>");
     }
     body.push_str("</p>\n");
 

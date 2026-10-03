@@ -43,6 +43,24 @@ pub struct Log {
     /// filesystem, like the README, so the renderer still consumes one thing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stylesheet: Option<String>,
+    /// Where the files the site replaces live in the repository, so a link to
+    /// one of them can go to its page instead.
+    #[serde(default)]
+    pub paths: SourcePaths,
+}
+
+/// The repository files that have a page of their own on the site. A doc
+/// linking `../WORKLOG.md` means the log's index, and on the site that is the
+/// entry list, not a file - there is no `WORKLOG.md` there to find.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SourcePaths {
+    /// The generated index, `WORKLOG.md` by default.
+    pub index: String,
+    /// The entries directory, `worklog` by default.
+    pub entries: String,
+    /// The README shown as the About page, if there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
 }
 
 /// One reference page in the canonical document.
@@ -288,6 +306,11 @@ impl Log {
             links: config.links.clone(),
             colors: config.colors.clone(),
             stylesheet: None,
+            paths: SourcePaths {
+                index: config.paths.index.clone(),
+                entries: config.paths.entries.trim_end_matches('/').to_string(),
+                readme: config.site.readme.clone(),
+            },
         }
     }
 }

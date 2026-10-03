@@ -83,10 +83,19 @@
       day.hidden = !day.querySelector("li:not([hidden])");
     });
 
+    // Whatever the page marks as hidden while searching - the reference
+    // index's own README - so results are not buried under it.
+    Array.prototype.slice.call(document.querySelectorAll("[data-hide-on-search]")).forEach(function (el) {
+      el.hidden = query !== "";
+    });
+    Array.prototype.slice.call(document.querySelectorAll("[data-show-on-search]")).forEach(function (el) {
+      el.hidden = query === "";
+    });
+
     if (status) {
       var total = rows.filter(function (row) { return !row.dataset.state || row.dataset.state === state; }).length;
       status.textContent =
-        picked.size > 0 || query !== "" ? shown + " of " + total + " entries" : "";
+        picked.size > 0 || query !== "" ? shown + " of " + total + " " + (list.dataset.noun || "entries") : "";
     }
   }
 

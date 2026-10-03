@@ -105,6 +105,23 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
         .collect();
     rendered.push("search.json", serde_json::to_vec(&searchable)?);
 
+    // The reference's own search index, beside its index page, keyed by slug.
+    if !log.docs.is_empty() {
+        let docs: Vec<serde_json::Value> = log
+            .docs
+            .iter()
+            .filter(|doc| !doc.is_index)
+            .map(|doc| {
+                serde_json::json!({
+                    "n": doc.slug,
+                    "t": format!("{} {}", doc.title, html::plain_md(&doc.body)).to_lowercase(),
+                })
+            })
+            .collect();
+        rendered.push("docs/search.json", serde_json::to_vec(&docs)?);
+        rendered.push("docs/search.js", include_str!("assets/search.js"));
+    }
+
     Ok(rendered)
 }
 
@@ -280,6 +297,27 @@ mod tests {
     #[test]
     fn without_colours_the_stylesheet_is_the_built_in_one() {
         assert_eq!(stylesheet(&simple()), include_str!("assets/style.css"));
+    }
+
+    #[test]
+    fn a_link_to_a_file_the_site_replaces_goes_to_its_page() {
+        let mut built = log(&[(
+            "number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec",
+            "The [index](../WORKLOG.md), the [entries](../worklog/) and the \
+             [readme](../README.md#install).\n\n**Still unknown:** nothing",
+        )]);
+        built.readme = Some("# A Project".into());
+        built.paths.readme = Some("README.md".into());
+        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
+        let page = html::entry(&built, 0, &by_number);
+        // No repository is configured, so these used to stay relative links to
+        // files the site does not have.
+        assert!(page.contains("<a href=\"../\">index</a>"), "{page}");
+        assert!(page.contains("<a href=\"../\">entries</a>"), "{page}");
+        assert!(
+            page.contains("<a href=\"../about/#install\">readme</a>"),
+            "{page}"
+        );
     }
 
     #[test]

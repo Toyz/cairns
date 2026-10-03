@@ -108,22 +108,27 @@ a:hover { color: var(--accent); }
 
 /* Rail, column, contents. The third column is present on every page even when
    it is empty, so the reading column lands in the same place throughout. */
+/* Three columns on any desktop: the rail, the reading column, and contents
+   floating on the right. The side columns are the same width as each other at
+   every width - they give way together - so the reading column is centred on
+   the screen whether or not a page has contents. Two columns on a laptop put
+   the rail and page centred as a pair, the page itself off to the right, and
+   the contents above it. */
 .shell {
   display: grid;
-  grid-template-columns: 14rem minmax(0, var(--page-width));
-  gap: var(--space-5);
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, var(--page-width)) minmax(10rem, 14rem);
+  gap: clamp(var(--space-3), 3.5vw, var(--space-5));
   justify-content: center;
-  max-width: 74rem;
+  max-width: 88rem;
   margin: 0 auto;
   padding: var(--space-4) var(--space-3) var(--space-6);
 }
-
-@media (min-width: 86rem) {
-  .shell {
-    grid-template-columns: 14rem minmax(0, var(--page-width)) 12rem;
-    max-width: 88rem;
-  }
+@media (min-width: 62.0625rem) {
+  .rail { grid-column: 1; grid-row: 1; }
+  main { grid-column: 2; grid-row: 1; }
+  .contents-rail { grid-column: 3; grid-row: 1; }
 }
+
 
 .contents-rail {
   position: sticky;
@@ -267,19 +272,21 @@ details > summary::-webkit-details-marker { display: none; }
 
 /* A folder names itself and then indents what is inside it, which is the shape
    the tree already has on disk. */
+/* A folder reads like a row of the Areas list - same size, same weight, count
+   on the right - rather than a bold heading of its own. */
 .tree .folder summary {
   margin-top: 2px;
   padding: 0.25rem var(--space-1);
   border-radius: var(--radius);
-  color: var(--ink);
+  color: var(--ink-soft);
   font-size: var(--step--1);
-  font-weight: 600;
   line-height: 1.4;
 }
+.tree .folder details[open] > summary { color: var(--ink); }
 .tree .folder summary:hover { background: var(--paper-sunk); }
 .tree .folder summary a { display: inline; padding: 0; color: inherit; }
 .tree .folder summary a:hover { background: none; text-decoration: underline; }
-.tree .folder summary .count { font-size: 0.75rem; }
+.tree .folder summary .count { opacity: 0.55; }
 .tree .folder ul {
   margin: 0 0 var(--space-1) 0.7rem;
   padding-left: var(--space-1);
@@ -595,7 +602,7 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
 .glance { font-family: var(--font-ui); font-size: var(--step--1); }
 .glance-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
   gap: var(--space-1);
   margin: 0 0 var(--space-3);
 }
@@ -662,10 +669,10 @@ kbd {
   text-align: center;
 }
 
-/* Below three columns the glance would sit above the list, pushing the first
-   entry down for numbers that matter less than it. It goes; the open count
-   is in the nav anyway. */
-@media (max-width: 86rem) {
+/* On a phone the glance would sit above the list, pushing the first entry down
+   for numbers that matter less than it. It goes; the open count is in the nav
+   anyway. */
+@media (max-width: 62rem) {
   .contents-rail:has(.glance) { display: none; }
 }
 
@@ -707,9 +714,22 @@ h2.section {
 h2.section a { color: var(--ink); text-decoration: none; }
 h2.section a:hover { color: var(--accent); }
 
+/* How sure a page is, in words, quiet - except a guess, which is the one a
+   reader should not lean on. */
 .status { letter-spacing: 0.04em; }
-.status--guess { color: var(--accent); }
 .status--solid, .status--partial { color: var(--ink-faint); }
+.status--guess { color: var(--accent); }
+
+/* The reference index: a section is headed like a day on the entry list, and
+   says what it is before its pages. */
+.doc-section + .doc-section, .doc-list + .doc-section { margin-top: var(--space-4); }
+.doc-section .day-label a { color: inherit; text-decoration: none; }
+.doc-section .day-label a:hover { color: var(--accent); }
+.section-lead {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--ink-soft);
+  font-family: var(--font-text);
+}
 
 /* Contents ---------------------------------------------------------------- */
 
@@ -735,9 +755,19 @@ h2.section a:hover { color: var(--accent); }
 .toc a:hover { background: var(--paper-sunk); color: var(--ink); }
 .toc .toc-3 a { padding-left: var(--space-2); color: var(--ink-faint); }
 
-/* Below the width that fits three columns, contents sits above the prose
-   rather than vanishing. */
-@media (max-width: 86rem) {
+/* Where they sit beside the page, the Reference and Contents labels are labels,
+   like Areas and This log: nothing to fold, so no chevron and no toggle. */
+@media (min-width: 62.0625rem) {
+  .tree > summary { pointer-events: none; }
+  .tree > summary::before { display: none; }
+}
+@media (min-width: 62.0625rem) {
+  .toc > summary { pointer-events: none; }
+  .toc > summary::before { display: none; }
+}
+
+/* On a phone, contents sits above the prose rather than vanishing. */
+@media (max-width: 62rem) {
   .contents-rail {
     position: static;
     max-height: none;
@@ -750,16 +780,6 @@ h2.section a:hover { color: var(--accent); }
   main { order: 1; }
 }
 
-/* Two columns, three things to place. Left to auto-placement, the contents box
-   took the second column of the first row and the article wrapped into the
-   first column of the second - a 14rem strip under the rail, on every laptop
-   between 62rem and 86rem wide. The rail spans both rows; contents and the
-   article share the reading column, one above the other. */
-@media (min-width: 62.0625rem) and (max-width: 86rem) {
-  .rail { grid-column: 1; grid-row: 1 / span 2; }
-  .contents-rail, main { grid-column: 2; }
-  .contents-rail { align-self: start; }
-}
 
 /* One entry --------------------------------------------------------------- */
 
@@ -825,11 +845,7 @@ article > *:last-child { margin-bottom: 0; }
    and earn the accent on hover rather than arriving blue and underlined. */
 .dateline a { color: inherit; text-decoration: none; }
 .dateline a.chip:hover { border-color: var(--accent); color: var(--accent); }
-.dateline .status {
-  padding: 0.15rem 0.6rem;
-  border: 1px dashed var(--rule);
-  border-radius: 1rem;
-}
+
 .dateline .chip { text-decoration: none; }
 .dateline .chip:hover { border-color: var(--ink-faint); color: var(--ink); }
 
