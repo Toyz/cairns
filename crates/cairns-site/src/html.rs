@@ -582,12 +582,12 @@ pub fn home(log: &Log) -> String {
          title=\"Compact\">{compact}</button>\n</div>\n</div>\n\
          <p id=\"status\"></p>\n<div class=\"days\" id=\"entries\">",
         // An arrow beside lines that shrink the way it points.
-        newest = icon("<path d=\"M4 2.5v11M1.75 11.25 4 13.5l2.25-2.25M9 3.5h5.5M9 8h4M9 12.5h2.5\"/>"),
-        oldest = icon("<path d=\"M4 13.5v-11M1.75 4.75 4 2.5l2.25 2.25M9 3.5h2.5M9 8h4M9 12.5h5.5\"/>"),
+        newest =
+            icon("<path d=\"M4 2.5v11M1.75 11.25 4 13.5l2.25-2.25M9 3.5h5.5M9 8h4M9 12.5h2.5\"/>"),
+        oldest =
+            icon("<path d=\"M4 13.5v-11M1.75 4.75 4 2.5l2.25 2.25M9 3.5h2.5M9 8h4M9 12.5h5.5\"/>"),
         // A title over a summary, twice; and four plain lines.
-        detailed = icon(
-            "<path d=\"M2 3h12M2 6h8\"/><path d=\"M2 10.5h12M2 13.5h8\" />"
-        ),
+        detailed = icon("<path d=\"M2 3h12M2 6h8\"/><path d=\"M2 10.5h12M2 13.5h8\" />"),
         compact = icon("<path d=\"M2 3h12M2 6.33h12M2 9.67h12M2 13h12\"/>"),
     );
 
