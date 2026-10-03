@@ -202,6 +202,9 @@ a:hover { color: var(--accent); }
   color: var(--ink-faint);
 }
 .rail-links a:hover svg { color: var(--accent); }
+/* An icon from a URL or a non-SVG file draws its own colours; it only takes
+   the size. */
+.rail-links img { width: 0.95rem; height: 0.95rem; flex: 0 0 auto; object-fit: contain; }
 
 .rail-label {
   margin: 0 0 var(--space-1);
@@ -225,12 +228,61 @@ a:hover { color: var(--accent); }
 }
 .tree a:hover { background: var(--paper-sunk); color: var(--ink); }
 .tree a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+/* Anything that folds says so with one small chevron, turned when open. The
+   browser's own triangle is a different size in every engine. */
+details > summary { list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+.tree > summary,
+.tree .folder summary,
+.toc > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tree > summary::before,
+.tree .folder summary::before,
+.toc > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0.35em;
+  height: 0.35em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.tree[open] > summary::before,
+.tree .folder details[open] > summary::before,
+.toc[open] > summary::before { transform: rotate(45deg); }
+.tree .count, .toc .count {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.tree > summary { margin: 0 0 var(--space-1); }
+.tree > summary .count { margin-left: 0.25rem; }
+
 /* A folder names itself and then indents what is inside it, which is the shape
    the tree already has on disk. */
-.tree .folder > a { color: var(--ink); font-weight: 600; margin-top: var(--space-1); }
+.tree .folder summary {
+  margin-top: 2px;
+  padding: 0.25rem var(--space-1);
+  border-radius: var(--radius);
+  color: var(--ink);
+  font-size: var(--step--1);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.tree .folder summary:hover { background: var(--paper-sunk); }
+.tree .folder summary a { display: inline; padding: 0; color: inherit; }
+.tree .folder summary a:hover { background: none; text-decoration: underline; }
+.tree .folder summary .count { font-size: 0.75rem; }
 .tree .folder ul {
-  margin-left: var(--space-1);
-  padding-left: var(--space-2);
+  margin: 0 0 var(--space-1) 0.7rem;
+  padding-left: var(--space-1);
   border-left: 1px solid var(--rule);
 }
 /* A facet list, not a row of pills stacked: no borders, counts aligned, the
@@ -664,6 +716,7 @@ h2.section a:hover { color: var(--accent); }
 .toc { font-family: var(--font-ui); font-size: var(--step--1); line-height: 1.5; }
 .toc-label {
   margin: 0 0 var(--space-1);
+  font-size: var(--step--1);
   color: var(--ink-faint);
   font-weight: 700;
   text-transform: uppercase;
@@ -759,6 +812,15 @@ article > *:last-child { margin-bottom: 0; }
 }
 .dateline time { font-variant-numeric: tabular-nums; }
 .dateline .from { color: var(--ink-faint); }
+/* The evidence a reference page rests on, as the entries' own numbers. */
+.dateline .evidence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+.dateline .evidence a { color: var(--ink-soft); }
+.dateline .evidence a:hover { color: var(--accent); }
 /* Links in a dateline are metadata, not body links: they take the meta colour
    and earn the accent on hover rather than arriving blue and underlined. */
 .dateline a { color: inherit; text-decoration: none; }
@@ -883,7 +945,11 @@ blockquote {
 
 .table-scroll { overflow-x: auto; margin: 0 0 var(--space-3); }
 table { border-collapse: collapse; width: 100%; font-family: var(--font-ui); font-size: var(--step--1); }
-th, td { text-align: left; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--rule-faint); }
+th, td { text-align: left; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--rule-faint); vertical-align: top; }
+/* The first column is usually what a row is - a page, a field, a name - and a
+   long last column squeezed it to a word a line. It keeps enough room to be
+   read; the table scrolls in its own box before it gives that up. */
+td:first-child, th:first-child { min-width: 9rem; }
 th {
   font-weight: 600;
   white-space: nowrap;
@@ -928,12 +994,15 @@ th {
   letter-spacing: 0.12em;
 }
 .unknown p { margin: 0; }
+/* A trailer may be a list of questions rather than one. */
+.unknown-text ul, .unknown-text ol { margin: 0; padding-left: 1.2rem; }
+.unknown-text li + li, .unknown-text p + p { margin-top: var(--space-1); }
 
 /* A question a later entry answered: kept where it was asked, struck through
    the way a notebook strikes one out, with the answer named. */
 .unknown--answered { opacity: 0.85; }
 .unknown--answered strong { color: var(--ink-faint); }
-.unknown--answered > p:first-of-type { text-decoration: line-through; color: var(--ink-faint); }
+.unknown--answered .unknown-text { text-decoration: line-through; color: var(--ink-faint); }
 .unknown .answered {
   margin-top: var(--space-1);
   font-family: var(--font-ui);
@@ -975,27 +1044,86 @@ nav.pager .label {
 }
 
 .questions { list-style: none; margin: 0; padding: 0; }
-.questions li { padding: var(--space-3) 0; }
-.questions li + li { border-top: 1px solid var(--rule-faint); }
-.questions .question p {
-  margin: 0;
+/* One card an entry: its number in the gutter as on the index, its title,
+   then what it left open. Only these are rows - a trailer written as a list
+   has items of its own, and they are not. */
+.questions > li {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+.questions > li + li { border-top: 1px solid var(--rule-faint); }
+.q-no {
+  flex: 0 0 2.5rem;
+  padding-top: 0.1rem;
+  color: var(--ink-faint);
+  font-family: var(--font-text);
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-decoration: none;
+}
+.q-no:hover { color: var(--accent); }
+.q-main { flex: 1 1 auto; min-width: 0; }
+.q-title {
+  display: block;
+  color: var(--ink);
   font-family: var(--font-text);
   font-size: var(--step-1);
-  line-height: 1.6;
-  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.35;
+  text-decoration: none;
 }
-.questions .source {
+.q-title:hover { text-decoration: underline; text-decoration-thickness: 1px; }
+.q-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin: var(--space-1) 0 0;
+  margin: 0.3rem 0 var(--space-2);
+  color: var(--ink-faint);
   font-family: var(--font-ui);
   font-size: var(--step--1);
-  color: var(--ink-faint);
 }
-.questions .source a { color: var(--ink-faint); text-decoration: none; }
-.questions .source a:hover { color: var(--accent); text-decoration: underline; }
-.questions .source time { font-variant-numeric: tabular-nums; }
+.q-meta time { font-variant-numeric: tabular-nums; }
+.q-count { color: var(--accent); }
+.question {
+  color: var(--ink-soft);
+  font-family: var(--font-text);
+  font-size: var(--step-0);
+  line-height: 1.6;
+}
+.question p { margin: 0; }
+.question p + p, .question p + ul, .question ul + p { margin-top: var(--space-1); }
+.question ul, .question ol { margin: 0; padding-left: 1.1rem; }
+.question li + li { margin-top: 0.4rem; }
+.question li::marker { color: var(--accent); }
+/* The rest of a long list, folded in the page as served. Its summary sits where
+   the next item would, and opening it only adds below - nothing above moves. */
+.question details.more > ul, .question details.more > ol { margin-top: 0.4rem; }
+.question details.more > summary {
+  margin-top: 0.4rem;
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+}
+.question details.more > summary:hover { text-decoration: underline; }
+.question details.more[open] > summary { display: none; }
+
+/* Open and closed: one list, two views. Which rows show first is decided
+   here rather than by a script, so the page is laid out right from the start. */
+.questions > li[data-state="closed"] { display: none; }
+.questions.show-closed > li[data-state="closed"] { display: flex; }
+.questions.show-closed > li[data-state="open"] { display: none; }
+.questions > li[data-state="closed"] .question { color: var(--ink-faint); }
+.questions > li[data-state="closed"] .question li::marker { color: var(--ink-faint); }
+.q-closed { color: var(--link); }
+.q-closed a { color: inherit; }
+
+/* A switch of words rather than icons, for a choice an icon would not say. */
+.switch--words button { width: auto; padding: 0 0.7rem; gap: 0.4rem; display: flex; font: inherit; font-size: var(--step--1); }
+.switch--words .count { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+
 
 footer {
   margin-top: var(--space-6);

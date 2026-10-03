@@ -282,6 +282,54 @@ mod tests {
         assert_eq!(stylesheet(&simple()), include_str!("assets/style.css"));
     }
 
+    #[test]
+    fn a_closed_question_says_so_on_the_entry_that_asked_it() {
+        let built = log(&[
+            (
+                "number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec",
+                "Prose.\n\n**Still unknown:**\n- whether [[2]] holds\n- the other thing",
+            ),
+            (
+                "number: 2\ntitle: Title 2\ndate: 2026-09-21\narea: spec\nresolves: 1",
+                "Prose.\n\n**Still unknown:** nothing",
+            ),
+        ]);
+        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
+        let asked = html::entry(&built, 0, &by_number);
+        assert!(asked.contains("unknown--answered"), "{asked}");
+        assert!(
+            asked.contains("Closed by <a href=\"../2-title-2/\">No. 2"),
+            "{asked}"
+        );
+        // A list stays a list, and its reference is a link, not brackets.
+        assert!(
+            asked.contains("<li>whether <a href=\"../2-title-2/\""),
+            "{asked}"
+        );
+        assert!(!asked.contains("[[2]]"), "{asked}");
+        assert!(built.open_questions.is_empty());
+    }
+
+    #[test]
+    fn the_open_page_links_the_references_in_a_question() {
+        let built = log(&[
+            (
+                "number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec",
+                "Prose.\n\n**Still unknown:** nothing",
+            ),
+            (
+                "number: 2\ntitle: Title 2\ndate: 2026-09-21\narea: spec",
+                "Prose.\n\n**Still unknown:**\n- what [[1]] left\n- and more",
+            ),
+        ]);
+        let page = html::open_questions(&built);
+        assert!(
+            page.contains("<li>what <a href=\"../1-title-1/\""),
+            "{page}"
+        );
+        assert!(page.contains("<li>and more</li>"), "{page}");
+    }
+
     fn entry_page_with_files(files: &str) -> String {
         let built = log(&[(
             &format!("number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec\nfiles: {files}"),

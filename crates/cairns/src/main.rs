@@ -136,11 +136,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             // right behaviour at build time - a typo should not stop a site -
             // and the wrong behaviour to stay quiet about.
             for link in &config.links {
-                if let Some(icon) = &link.icon
-                    && cairns_site::icon::svg(icon).is_none()
+                let Some(icon) = &link.icon else { continue };
+                if cairns_site::icon::is_path(icon) {
+                    if let Err(problem) = resolve_icon(&root, icon) {
+                        problems.push(format!(
+                            "cairns.toml: link {:?} icon {icon:?} {problem}",
+                            link.label
+                        ));
+                    }
+                } else if !cairns_site::icon::is_url(icon) && cairns_site::icon::svg(icon).is_none()
                 {
                     problems.push(format!(
-                        "cairns.toml: link {:?} wants icon {icon:?}, which is not one of: {}",
+                        "cairns.toml: link {:?} wants icon {icon:?}, which is not one of: {} \
+                         - nor a URL, nor a path to an image in the repository",
                         link.label,
                         cairns_site::icon::NAMES.join(", ")
                     ));
@@ -185,8 +193,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             if built.open_questions.is_empty() {
                 println!("nothing open");
             }
+            // A trailer may run to several lines - a list of questions - and
+            // each continues under the first, clear of the number column.
             for question in &built.open_questions {
-                println!("{:>4}  {}", question.entry, question.text);
+                let mut lines = question.text.lines();
+                println!(
+                    "{:>4}  {}",
+                    question.entry,
+                    lines.next().unwrap_or_default()
+                );
+                for line in lines {
+                    println!("      {line}");
+                }
             }
         }
 
@@ -558,6 +576,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
 /// Find `cairns.toml` by walking up from the working directory, so the command
 /// works from anywhere in the repo.
+/// `cairns.toml` at a root already found, read again - for `serve`, which
+/// watches it.
+fn load_config(root: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+    Ok(Config::parse(&std::fs::read_to_string(
+        root.join("cairns.toml"),
+    )?)?)
+}
+
 fn load() -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     let mut dir = std::env::current_dir()?;
     loop {
@@ -595,6 +621,22 @@ fn build_log(
             Err(problem) => eprintln!("cairns: {path}: {problem}"),
         }
     }
+    // A link icon that names a file in the repository is read here, like the
+    // README, and carried in the document as the markup or data it resolves
+    // to - the renderer reads no files, and a hosted one has none to read.
+    for link in &mut built.links {
+        if let Some(icon) = link.icon.as_deref()
+            && cairns_site::icon::is_path(icon)
+        {
+            link.icon = match resolve_icon(root, icon) {
+                Ok(resolved) => Some(resolved),
+                Err(problem) => {
+                    eprintln!("cairns: link {:?} icon {icon:?} {problem}", link.label);
+                    None
+                }
+            };
+        }
+    }
     // A stylesheet named and missing is an error, not a warning: the site would
     // build, look wrong, and say nothing about why.
     if let Some(path) = &config.site.stylesheet {
@@ -604,6 +646,65 @@ fn build_log(
         );
     }
     Ok(built)
+}
+
+/// A repository image as an icon: an SVG's own markup, so it takes the page's
+/// colours, or anything else as a `data:` URL, so the page still makes no
+/// request for it.
+fn resolve_icon(root: &Path, path: &str) -> Result<String, String> {
+    let full = root.join(path.trim());
+    let bytes = std::fs::read(&full).map_err(|problem| format!("cannot be read: {problem}"))?;
+    let extension = full
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mime = match extension.as_str() {
+        "svg" => {
+            let text = String::from_utf8(bytes).map_err(|_| "is not UTF-8 text".to_string())?;
+            return cairns_site::icon::clean_svg(&text);
+        }
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        other => {
+            return Err(format!(
+                "is a .{other} file; an icon is .svg, .png, .jpg, .gif, .webp or .ico"
+            ));
+        }
+    };
+    // Icons are small; one that is not is a mistake worth saying out loud,
+    // since it is copied into every page.
+    if bytes.len() > 64 * 1024 {
+        return Err(format!(
+            "is {} KB; an icon copied into every page should be under 64",
+            bytes.len() / 1024
+        ));
+    }
+    Ok(format!("data:{mime};base64,{}", base64(&bytes)))
+}
+
+/// Standard base64, for the one `data:` URL this tool makes. Ten lines, where
+/// a crate would be a dependency for ten lines.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// The reference pages, if the project keeps any.
@@ -985,6 +1086,21 @@ mod tests {
 
     fn config() -> Config {
         Config::parse(&starter_config("A Project")).expect("the starter config is valid")
+    }
+
+    #[test]
+    fn base64_matches_the_standard_vectors() {
+        for (input, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64(input.as_bytes()), encoded);
+        }
     }
 
     #[test]

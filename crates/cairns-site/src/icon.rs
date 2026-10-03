@@ -77,3 +77,150 @@ mod tests {
         assert!(svg("discord").is_some());
     }
 }
+
+/// Whether an `icon` value is a URL rather than a name or a path.
+pub fn is_url(icon: &str) -> bool {
+    let icon = icon.trim();
+    icon.starts_with("https://")
+        || icon.starts_with("http://")
+        || icon.starts_with("//")
+        || icon.starts_with("data:image/")
+}
+
+/// Whether an `icon` value names a file in the repository: anything with a
+/// slash or a dot in it that is not a URL. A built-in name has neither.
+pub fn is_path(icon: &str) -> bool {
+    let icon = icon.trim();
+    !is_url(icon) && !icon.starts_with('<') && (icon.contains('/') || icon.contains('.'))
+}
+
+/// An SVG file's markup, made safe to put in a page as it is.
+///
+/// Inline rather than an `<img>` so that an icon drawn in `currentColor`
+/// follows the page's colours, light and dark, like the built-in ones. That
+/// puts the file's markup in every page, so anything that could run is
+/// refused rather than cleaned: an icon has no business carrying a script.
+pub fn clean_svg(text: &str) -> Result<String, String> {
+    let mut rest = text.trim_start_matches('\u{feff}').trim();
+    // The prolog, a doctype and leading comments are not part of the drawing.
+    loop {
+        if let Some(after) = rest.strip_prefix("<?") {
+            rest = after
+                .split_once("?>")
+                .map(|(_, r)| r)
+                .unwrap_or("")
+                .trim_start();
+        } else if let Some(after) = rest.strip_prefix("<!--") {
+            rest = after
+                .split_once("-->")
+                .map(|(_, r)| r)
+                .unwrap_or("")
+                .trim_start();
+        } else if rest.starts_with("<!") {
+            rest = rest
+                .split_once('>')
+                .map(|(_, r)| r)
+                .unwrap_or("")
+                .trim_start();
+        } else {
+            break;
+        }
+    }
+    if !rest.starts_with("<svg") {
+        return Err("is not an SVG - it does not start with <svg".into());
+    }
+    let lower = rest.to_ascii_lowercase();
+    for refused in [
+        "<script",
+        "javascript:",
+        "<foreignobject",
+        "<iframe",
+        "<object",
+        "<embed",
+    ] {
+        if lower.contains(refused) {
+            return Err(format!("contains {refused}, which an icon cannot carry"));
+        }
+    }
+    // Event handler attributes: ` onload=`, ` onclick=` and the rest.
+    let bytes = lower.as_bytes();
+    for (at, _) in lower.match_indices("on") {
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        if !matches!(before, Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            continue;
+        }
+        let name: String = lower[at..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        let after = lower[at + name.len()..].trim_start();
+        if name.len() > 2 && after.starts_with('=') {
+            return Err(format!(
+                "has an {name} attribute, which an icon cannot carry"
+            ));
+        }
+    }
+    Ok(rest.trim_end().to_string())
+}
+
+/// The markup for an icon in the rail, or `None` for no icon: a built-in name,
+/// a URL, or markup a repository path was already resolved to.
+pub fn html(icon: &str) -> Option<String> {
+    let icon = icon.trim();
+    if let Some(inner) = svg(icon) {
+        return Some(format!(
+            "<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\">{inner}</svg>"
+        ));
+    }
+    if let Some(rest) = icon.strip_prefix("<svg") {
+        return Some(format!(
+            "<svg aria-hidden=\"true\" focusable=\"false\"{rest}"
+        ));
+    }
+    if is_url(icon) {
+        return Some(format!(
+            "<img src=\"{}\" alt=\"\" aria-hidden=\"true\" loading=\"lazy\">",
+            crate::html::escape(icon)
+        ));
+    }
+    None
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    #[test]
+    fn an_icon_is_a_name_a_url_or_a_path() {
+        assert!(html("github").is_some_and(|h| h.contains("viewBox=\"0 0 16 16\"")));
+        assert!(html("https://example.com/i.svg").is_some_and(|h| h.starts_with("<img")));
+        assert!(is_path("assets/logo.svg") && is_path("logo.png"));
+        assert!(!is_path("github") && !is_path("https://example.com/i.svg"));
+        // An unresolved path, or a misspelt name, draws nothing.
+        assert!(html("assets/logo.svg").is_none() && html("githb").is_none());
+    }
+
+    #[test]
+    fn an_svg_file_is_inlined_without_its_prolog() {
+        let clean = clean_svg(
+            "<?xml version=\"1.0\"?>\n<!-- drawn by hand -->\n<svg viewBox=\"0 0 24 24\"><path d=\"M0 0h24\"/></svg>\n",
+        )
+        .unwrap();
+        assert!(clean.starts_with("<svg viewBox"));
+        assert!(
+            html(&clean)
+                .unwrap()
+                .starts_with("<svg aria-hidden=\"true\" focusable=\"false\" viewBox")
+        );
+    }
+
+    #[test]
+    fn an_svg_that_could_run_anything_is_refused() {
+        assert!(clean_svg("<svg><script>alert(1)</script></svg>").is_err());
+        assert!(clean_svg("<svg onload=\"alert(1)\"></svg>").is_err());
+        assert!(clean_svg("<svg><a href=\"javascript:x\"/></svg>").is_err());
+        assert!(clean_svg("<html></html>").is_err());
+        // `stroke-linejoin` and `fill-opacity` are not handlers.
+        assert!(clean_svg("<svg><path stroke-linejoin=\"round\" font=\"x\"/></svg>").is_ok());
+    }
+}

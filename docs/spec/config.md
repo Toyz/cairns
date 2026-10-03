@@ -137,7 +137,20 @@ url   = "https://github.com/Toyz/cairns/releases"
 icon  = "download"
 ```
 
-`icon` is optional and names one of a small built-in set, drawn inline:
+`icon` is optional, and is one of three things:
+
+- a **name** from the small built-in set below, drawn inline;
+- a **URL** - `https://...` - shown as an image;
+- a **path** to an image in the repository - `assets/logo.svg` - read at build
+  time. An SVG is inlined, so one drawn in `currentColor` follows the page's
+  colours like the built-in icons do. A `.png`, `.jpg`, `.gif`, `.webp` or
+  `.ico` is embedded as a `data:` URL, up to 64 KB, so the page still makes no
+  request for it. An SVG carrying a script, an event handler or a
+  `javascript:` link is refused: it is copied into every page.
+
+A value with a `/` or a `.` in it is a path; one without is a name.
+
+The built-in names:
 
 `github`, `globe`, `book`, `code`, `download`, `rss`, `chat`, `mail`, `star`,
 `link`
@@ -147,9 +160,14 @@ with `site` and `web` for `globe`, `docs` for `book`, `feed` for `rss`, and
 sprite for the same reason the page uses no webfonts: an icon that needs a
 request is missing for the first second, or forever behind a proxy.
 
-A name that is not built in renders no icon - a link without a glyph still
-works, and a typo should not stop a site building - but `check` reports it, so
-it does not stay quiet either.
+A name that is not built in, or a path that cannot be read or is refused,
+renders no icon - a link without a glyph still works, and a typo should not
+stop a site building - but `check` reports it, so it does not stay quiet
+either.
+
+In `log.json` a path is already resolved: `icon` holds the SVG's markup or the
+`data:` URL, because whatever renders the document may have no repository to
+read it from.
 
 ## `[check]`
 

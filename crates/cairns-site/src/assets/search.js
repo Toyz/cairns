@@ -6,7 +6,11 @@
   var list = document.getElementById("entries");
   if (!list) return;
 
-  var rows = Array.prototype.slice.call(list.querySelectorAll("li")); // newest first
+  // Only the rows themselves: a row on the open questions page holds a list of
+  // its own, and those items are not rows.
+  var rows = Array.prototype.slice.call(list.querySelectorAll("li[data-n]")); // newest first
+  // The open questions page searches what it shows, not the entries' text.
+  var local = list.hasAttribute("data-local");
   // The entries come grouped under a heading per day. A day with nothing left
   // in it after filtering goes too, or the page is a column of empty dates.
   var days = Array.prototype.slice.call(list.querySelectorAll(".day"));
@@ -19,8 +23,17 @@
   var order = "new";
   var text = null; // number -> haystack, fetched on demand
 
+  function fromPage() {
+    text = new Map();
+    rows.forEach(function (row) {
+      text.set(row.dataset.n, (row.textContent || "").toLowerCase());
+    });
+    return text;
+  }
+
   function load() {
     if (text) return Promise.resolve(text);
+    if (local) return Promise.resolve(fromPage());
     return fetch("search.json")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -28,19 +41,18 @@
         data.forEach(function (row) { text.set(String(row.n), row.t.toLowerCase()); });
         return text;
       })
-      .catch(function () {
-        // Offline, or opened as a file:// page. Titles and summaries still filter.
-        text = new Map();
-        rows.forEach(function (row) {
-          text.set(row.dataset.n, (row.textContent || "").toLowerCase());
-        });
-        return text;
-      });
+      // Offline, or opened as a file:// page. Titles and summaries still filter.
+      .catch(fromPage);
   }
 
   // Each order is the other reversed, at both levels: the days, and the
   // entries within each day. So a change of order is one reversal of both.
   function reorder() {
+    if (!days.length) {
+      rows.slice().reverse().forEach(function (row) { list.appendChild(row); });
+      rows.reverse();
+      return;
+    }
     days.forEach(function (day) {
       var inner = day.querySelector("ul");
       var items = Array.prototype.slice.call(inner.children).reverse();
@@ -58,23 +70,30 @@
       var areas = (row.dataset.areas || "").split(" ");
       var byArea = picked.size === 0 || areas.some(function (a) { return picked.has(a); });
       var hay = text ? text.get(row.dataset.n) || "" : (row.textContent || "").toLowerCase();
-      var show = byArea && (query === "" || hay.indexOf(query) !== -1);
+      var inState = !row.dataset.state || row.dataset.state === state;
+      var show = inState && byArea && (query === "" || hay.indexOf(query) !== -1);
       row.hidden = !show;
       if (show) shown++;
+      // A match may be in the folded part of a long list; a search opens it.
+      if (query !== "" && show) {
+        Array.prototype.slice.call(row.querySelectorAll("details.more")).forEach(function (d) { d.open = true; });
+      }
     });
     days.forEach(function (day) {
       day.hidden = !day.querySelector("li:not([hidden])");
     });
 
     if (status) {
+      var total = rows.filter(function (row) { return !row.dataset.state || row.dataset.state === state; }).length;
       status.textContent =
-        picked.size > 0 || query !== "" ? shown + " of " + rows.length + " entries" : "";
+        picked.size > 0 || query !== "" ? shown + " of " + total + " entries" : "";
     }
   }
 
   function syncHash() {
     var parts = [];
     if (order === "old") parts.push("sort=old");
+    if (state === "closed") parts.push("state=closed");
     if (picked.size) parts.push("area=" + Array.from(picked).join(","));
     var hash = parts.length ? "#" + parts.join("&") : "";
     history.replaceState(null, "", location.pathname + location.search + hash);
@@ -112,14 +131,17 @@
   // pill on an entry page, which links back here with one already chosen.
   function fromHash() {
     var hash = location.hash.replace(/^#/, "");
-    // `#d2026-10-02` is a day in the list, from the activity strip - a place to
-    // scroll to, not a change of filters.
-    if (/^d\d/.test(hash)) return;
+    // A hash with no `key=value` in it - `#d2026-10-02` from the activity
+    // strip, `#closed` on the open questions page - is a place to scroll to,
+    // not a change of filters.
+    if (hash && hash.indexOf("=") === -1) return;
     picked.clear();
     var wanted = "new";
+    var wantedState = "open";
     hash.split("&").forEach(function (part) {
       var pair = part.split("=");
       if (pair[0] === "sort" && pair[1] === "old") wanted = "old";
+      if (pair[0] === "state" && pair[1] === "closed") wantedState = "closed";
       if (pair[0] === "area" && pair[1]) {
         decodeURIComponent(pair[1]).split(",").forEach(function (area) { picked.add(area); });
       }
@@ -131,6 +153,7 @@
     sorters.forEach(function (button) {
       button.setAttribute("aria-pressed", button.dataset.sort === order ? "true" : "false");
     });
+    if (states.length) showState(wantedState);
     chips.forEach(function (chip) {
       chip.setAttribute("aria-pressed", picked.has(chip.dataset.area) ? "true" : "false");
     });
@@ -190,6 +213,27 @@
     event.preventDefault();
     shown[next].focus();
     shown[next].scrollIntoView({ block: "nearest" });
+  });
+
+  // Open or closed, on the open questions page. Which rows are shown first is
+  // decided by the stylesheet, so the page is laid out right before any of
+  // this runs; the switch only flips a class.
+  var states = Array.prototype.slice.call(document.querySelectorAll("button[data-state]"));
+  var state = "open";
+  function showState(which) {
+    state = which;
+    list.classList.toggle("show-closed", which === "closed");
+    states.forEach(function (button) {
+      button.setAttribute("aria-pressed", button.dataset.state === which ? "true" : "false");
+    });
+  }
+  states.forEach(function (button) {
+    button.addEventListener("click", function () {
+      if (state === button.dataset.state) return;
+      showState(button.dataset.state);
+      syncHash();
+      apply();
+    });
   });
 
   // Arriving with a hash, and changing it without leaving the page.

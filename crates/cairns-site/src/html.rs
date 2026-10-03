@@ -453,8 +453,7 @@ fn shell(
             let glyph = link
                 .icon
                 .as_deref()
-                .and_then(crate::icon::svg)
-                .map(|svg| format!("<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\">{svg}</svg>"))
+                .and_then(crate::icon::html)
                 .unwrap_or_default();
             let _ = writeln!(
                 mine,
@@ -498,6 +497,7 @@ fn shell(
 </main>
 <aside class="contents-rail">{contents}</aside>
 </div>
+
 </body>
 </html>
 "#,
@@ -959,12 +959,40 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     let (headings, prose_html) = markdown_with_headings(prose(this), &links);
     body.push_str(&prose_html);
 
+    // The trailer, with its references linked like the prose's. A question a
+    // later entry closed stays where it was asked, struck through, naming what
+    // closed it - the stylesheet had the rules for that from the start and the
+    // page never used them, so a closed question looked exactly like an open
+    // one on the entry that asked it.
     if let Some(unknown) = &this.still_unknown {
-        let _ = writeln!(
-            body,
-            "<div class=\"unknown\"><strong>Still unknown</strong>{}</div>",
-            markdown(unknown)
-        );
+        let (_, text) = markdown_with_headings(unknown, &links);
+        if this.resolved_by.is_empty() {
+            let _ = writeln!(
+                body,
+                "<div class=\"unknown\"><strong>Still unknown</strong>\
+                 <div class=\"unknown-text\">{text}</div></div>"
+            );
+        } else {
+            let closers: Vec<String> = this
+                .resolved_by
+                .iter()
+                .map(|number| match by_number.get(number) {
+                    Some(other) => format!(
+                        "<a href=\"../{}/\">No. {number} \u{2014} {}</a>",
+                        escape(&path_of(other)),
+                        escape(&other.title)
+                    ),
+                    None => format!("No. {number}"),
+                })
+                .collect();
+            let _ = writeln!(
+                body,
+                "<div class=\"unknown unknown--answered\"><strong>Was unknown</strong>\
+                 <div class=\"unknown-text\">{text}</div>\
+                 <p class=\"answered\">Closed by {}.</p></div>",
+                closers.join(", ")
+            );
+        }
     }
     body.push_str("</article>\n<nav class=\"pager\">\n");
     if at > 0 {
@@ -986,41 +1014,9 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         );
     }
     body.push_str("</nav>\n");
-    // The arrow keys walk the log, the way the pager does. Inline because it
-    // is four lines and a request for it would cost more than it does.
-    body.push_str(
-        "<script>document.addEventListener(\"keydown\",function(e){\
-         if(e.metaKey||e.ctrlKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;\
-         var a=document.querySelector(e.key===\"ArrowLeft\"?\".pager .prev\":e.key===\"ArrowRight\"?\".pager .next\":null);\
-         if(a)location.href=a.href;});</script>\n",
-    );
+    body.push_str(ARROW_KEYS);
 
-    // Sections and their subsections both, because an entry long enough to
-    // want a contents list is long enough for its subsections to be where the
-    // reader is actually trying to get to.
-    let sections: Vec<&Heading> = headings
-        .iter()
-        .filter(|heading| heading.level == 2 || heading.level == 3)
-        .collect();
-    let contents = if sections.len() < 2 {
-        String::new()
-    } else {
-        let mut toc = String::from(
-            "<nav class=\"toc\" aria-label=\"Contents\">\n\
-                                    <p class=\"toc-label\">Contents</p>\n<ol>\n",
-        );
-        for section in &sections {
-            let _ = writeln!(
-                toc,
-                "<li class=\"toc-{}\"><a href=\"#{}\">{}</a></li>",
-                section.level,
-                escape(&section.id),
-                escape(&section.label)
-            );
-        }
-        toc.push_str("</ol>\n</nav>\n");
-        toc
-    };
+    let contents = contents_nav(&headings);
     let description = plain_md(this.summary.as_deref().unwrap_or(&this.title));
     let title = format!("{}. {}", this.number, this.title);
     shell(
@@ -1036,7 +1032,68 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     )
 }
 
+/// The sections of a page, for the contents rail.
+///
+/// Sections and their subsections both, because a page long enough to want a
+/// contents list is long enough for its subsections to be where the reader is
+/// actually trying to get to. Folded on a screen too narrow for a third column,
+/// where it sits above the prose: fifteen sections there were a screen of
+/// links before the first sentence.
+fn contents_nav(headings: &[Heading]) -> String {
+    let sections: Vec<&Heading> = headings
+        .iter()
+        .filter(|heading| heading.level == 2 || heading.level == 3)
+        .collect();
+    if sections.len() < 2 {
+        return String::new();
+    }
+    let mut toc = format!(
+        "<details class=\"toc\">\n\
+         <summary class=\"toc-label\">Contents <span class=\"count\">{}</span></summary>\n\
+         <nav aria-label=\"Contents\"><ol>\n",
+        sections.iter().filter(|section| section.level == 2).count()
+    );
+    for section in &sections {
+        let _ = writeln!(
+            toc,
+            "<li class=\"toc-{}\"><a href=\"#{}\">{}</a></li>",
+            section.level,
+            escape(&section.id),
+            escape(&section.label)
+        );
+    }
+    toc.push_str("</ol></nav>\n</details>\n");
+    toc.push_str(&open_when_wider("86rem"));
+    toc
+}
+
+/// Opens the `<details>` just before it when the screen is wider than `width`.
+///
+/// Served closed and opened here, during parsing, so the browser lays it out
+/// once at the right size. Served open and closed by a script at the end of
+/// the page, it drew open and then collapsed - the page visibly jumped.
+fn open_when_wider(width: &str) -> String {
+    format!(
+        "<script>if(!matchMedia(\"(max-width: {width})\").matches)\
+         document.currentScript.previousElementSibling.open=true;</script>\n"
+    )
+}
+
+/// The arrow keys walk whatever the pager links, on entries and reference pages
+/// alike. Inline because it is four lines and a request for it would cost more
+/// than it does.
+const ARROW_KEYS: &str = "<script>document.addEventListener(\"keydown\",function(e){\
+     if(e.metaKey||e.ctrlKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;\
+     var a=document.querySelector(e.key===\"ArrowLeft\"?\".pager .prev\":e.key===\"ArrowRight\"?\".pager .next\":null);\
+     if(a)location.href=a.href;});</script>\n";
+
 /// Everything the log has not closed out, in one place.
+///
+/// One card per entry, newest first, the entry named above its questions
+/// rather than under them: a question is a fragment out of context, and the
+/// reader needs the context first. A trailer that is a list is one card with
+/// its items, folded past five, because a triage entry carrying thirty
+/// questions forward otherwise buries everything after it.
 pub fn open_questions(log: &Log) -> String {
     let base = log.project.base_url.trim_end_matches('/');
     let by_number: BTreeMap<u32, &LogEntry> = log
@@ -1044,50 +1101,177 @@ pub fn open_questions(log: &Log) -> String {
         .iter()
         .map(|entry| (entry.number, entry))
         .collect();
+    let links = Links {
+        log,
+        from_dir: entry_dir(log),
+        rel: "../",
+        base: None,
+    };
 
-    let mut body = String::from("<article>\n<h1>Open questions</h1>\n");
+    let asked: usize = log
+        .open_questions
+        .iter()
+        .map(|q| question_count(&q.text))
+        .sum();
+    let closed: Vec<&LogEntry> = log
+        .entries
+        .iter()
+        .filter(|entry| entry.still_unknown.is_some() && !entry.resolved_by.is_empty())
+        .collect();
+
+    let mut body = String::from("<article class=\"open-page\">\n<h1>Open questions</h1>\n");
     let _ = writeln!(
         body,
-        "<p class=\"lead\">{} of {} entries end with something unresolved. \
-         Each is quoted as its entry left it.</p>",
-        log.open_questions.len(),
-        log.entries.len()
+        "<p class=\"lead\">{asked} {questions} across {asking} {entries}, quoted as each \
+         entry left it. A later entry closes one with <code>resolves:</code>.</p>",
+        questions = if asked == 1 { "question" } else { "questions" },
+        asking = log.open_questions.len(),
+        entries = if log.open_questions.len() == 1 {
+            "entry"
+        } else {
+            "entries"
+        },
     );
 
+    // The same toolbar as the index, minus density: search runs over the
+    // questions on this page, not the entries' full text.
+    if !log.open_questions.is_empty() {
+        body.push_str(
+            "<div class=\"toolbar\">\n<div class=\"search\">\n\
+             <svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\">\
+             <circle cx=\"7\" cy=\"7\" r=\"4.5\" fill=\"none\" stroke=\"currentColor\" \
+             stroke-width=\"1.5\"/><path d=\"M10.5 10.5 L14 14\" stroke=\"currentColor\" \
+             stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg>\n\
+             <input type=\"search\" id=\"q\" placeholder=\"Search the questions\" \
+             autocomplete=\"off\" spellcheck=\"false\">\n</div>\n",
+        );
+        // Open and closed are two views of one list rather than two lists:
+        // the closed ones used to unfold underneath, and opening a few hundred
+        // rows at the bottom of a page shifted everything around them.
+        let _ = writeln!(
+            body,
+            "<div class=\"switch switch--words\" role=\"group\" aria-label=\"Show\">\n\
+             <button data-state=\"open\" aria-pressed=\"true\">Open <span class=\"count\">{}</span></button>\n\
+             <button data-state=\"closed\" aria-pressed=\"false\">Closed <span class=\"count\">{}</span></button>\n\
+             </div>\n</div>\n<p id=\"status\"></p>",
+            log.open_questions.len(),
+            closed.len()
+        );
+    }
+
+    let mut chips = String::new();
     if log.open_questions.is_empty() {
         body.push_str("<p class=\"empty\">Nothing open.</p>\n");
     } else {
-        body.push_str("<ul class=\"questions\">\n");
-        for question in &log.open_questions {
-            body.push_str("<li>\n");
+        // Areas with something open, counted by entry, in the project's order.
+        let mut per_area: Vec<(&str, usize)> = Vec::new();
+        for area in &log.areas {
+            let count = log
+                .open_questions
+                .iter()
+                .filter(|q| {
+                    by_number
+                        .get(&q.entry)
+                        .is_some_and(|e| e.areas.contains(&area.name))
+                })
+                .count();
+            if count > 0 {
+                per_area.push((&area.name, count));
+            }
+        }
+        chips.push_str("<div class=\"filters\">\n<p class=\"rail-label\">Areas</p>\n");
+        for (name, count) in per_area {
             let _ = writeln!(
-                body,
-                "<div class=\"question\">{}</div>",
-                markdown(&question.text)
+                chips,
+                "<button class=\"chip\" data-area=\"{name}\" aria-pressed=\"false\">\
+                 <span>{name}</span><span class=\"count\">{count}</span></button>",
+                name = escape(name)
             );
-            // The question is a sentence fragment out of context, so it is
-            // always shown with the entry that raised it, by name.
-            match by_number.get(&question.entry) {
+        }
+        chips.push_str("</div>\n");
+
+        body.push_str("<ul class=\"questions\" id=\"entries\" data-local>\n");
+        // Every entry that asked something, open or closed, newest first; the
+        // switch decides which are shown.
+        let mut rows: Vec<(u32, &str, &[u32])> = log
+            .open_questions
+            .iter()
+            .map(|q| (q.entry, q.text.as_str(), &[][..]))
+            .chain(closed.iter().filter_map(|entry| {
+                entry
+                    .still_unknown
+                    .as_deref()
+                    .map(|text| (entry.number, text, entry.resolved_by.as_slice()))
+            }))
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.0));
+        for (number, text, closed_by) in rows {
+            let count = question_count(text);
+            let state = if closed_by.is_empty() {
+                "open"
+            } else {
+                "closed"
+            };
+            let by = if closed_by.is_empty() {
+                String::new()
+            } else {
+                let who: Vec<String> = closed_by
+                    .iter()
+                    .map(|n| match by_number.get(n) {
+                        Some(other) => format!(
+                            "<a href=\"../{}/\" title=\"{}\">#{n}</a>",
+                            escape(&path_of(other)),
+                            escape(&other.title)
+                        ),
+                        None => format!("#{n}"),
+                    })
+                    .collect();
+                format!(
+                    "<span class=\"q-closed\">closed by {}</span>",
+                    who.join(", ")
+                )
+            };
+            match by_number.get(&number) {
                 Some(entry) => {
                     let _ = writeln!(
                         body,
-                        "<p class=\"source\"><a href=\"../{path}/\">No. {n} \u{2014} {title}</a>\
-                         <time datetime=\"{date}\">{date}</time></p>",
-                        path = escape(&path_of(entry)),
+                        "<li data-n=\"{n}\" data-areas=\"{slugs}\" data-state=\"{state}\">\n\
+                         <a class=\"q-no\" href=\"../{path}/\">{n}</a>\n<div class=\"q-main\">\n\
+                         <a class=\"q-title\" href=\"../{path}/\">{title}</a>\n\
+                         <p class=\"q-meta\"><time datetime=\"{date}\">{short}</time>\
+                         <span>{areas}</span>{many}{by}</p>",
                         n = entry.number,
+                        slugs = escape(&entry.areas.join(" ")),
+                        path = escape(&path_of(entry)),
                         title = escape(&entry.title),
-                        date = entry.date
+                        date = entry.date,
+                        short = short_date(entry.date),
+                        areas = escape(&entry.areas.join(" \u{00b7} ")),
+                        many = if count > 1 {
+                            format!("<span class=\"q-count\">{count} questions</span>")
+                        } else {
+                            String::new()
+                        }
                     );
                 }
                 None => {
-                    let _ = writeln!(body, "<p class=\"source\">No. {}</p>", question.entry);
+                    let _ = writeln!(
+                        body,
+                        "<li data-n=\"{number}\" data-state=\"{state}\">\n\
+                         <span class=\"q-no\">{number}</span>\n<div class=\"q-main\">"
+                    );
                 }
             }
-            body.push_str("</li>\n");
+            let _ = writeln!(
+                body,
+                "<div class=\"question\">{}</div>\n</div>\n</li>",
+                question_html(text, &links)
+            );
         }
         body.push_str("</ul>\n");
     }
-    body.push_str("</article>\n");
+
+    body.push_str("</article>\n<script src=\"../search.js\" defer></script>\n");
 
     shell(
         log,
@@ -1096,9 +1280,56 @@ pub fn open_questions(log: &Log) -> String {
         &format!("{base}/open/"),
         "../",
         "open",
-        "",
+        &chips,
         "",
         &body,
+    )
+}
+
+/// Whether a line of a trailer starts a top-level list item.
+fn starts_item(line: &str) -> bool {
+    line.starts_with("- ")
+        || line.starts_with("* ")
+        || line.starts_with("+ ")
+        || line.split_once(['.', ')']).is_some_and(|(n, rest)| {
+            !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with(' ')
+        })
+}
+
+/// How many questions a trailer asks: the items of a list, or one.
+fn question_count(text: &str) -> usize {
+    text.lines().filter(|line| starts_item(line)).count().max(1)
+}
+
+/// A trailer as HTML, a long list folded past its fifth item.
+///
+/// The fold is a `<details>` in the page as served, not something a script
+/// does after it draws: folding on load moved every card below it, and a page
+/// that jumps as it settles reads as broken. The list is split in the
+/// markdown, so the folded half is the same list continued - an ordered one
+/// keeps its numbering, because its sixth item says `6.`.
+fn question_html(text: &str, links: &Links<'_>) -> String {
+    const SHOWN: usize = 5;
+    let starts: Vec<usize> = text
+        .split_inclusive('\n')
+        .scan(0, |at, line| {
+            let here = *at;
+            *at += line.len();
+            Some((here, line))
+        })
+        .filter(|(_, line)| starts_item(line))
+        .map(|(at, _)| at)
+        .collect();
+    if starts.len() <= SHOWN + 2 {
+        return markdown_with_headings(text, links).1;
+    }
+    let cut = starts[SHOWN];
+    let (shown, folded) = text.split_at(cut);
+    format!(
+        "{}<details class=\"more\"><summary>Show {} more</summary>{}</details>",
+        markdown_with_headings(shown, links).1,
+        starts.len() - SHOWN,
+        markdown_with_headings(folded, links).1
     )
 }
 
@@ -1150,12 +1381,18 @@ pub fn about(log: &Log) -> String {
 /// so it can mark itself.
 pub fn docs_tree(log: &Log, rel: &str, here: &str) -> String {
     let label = log.docs_label.as_deref().unwrap_or("Reference");
+    // On a phone the rail sits above the page, and sixty titles there were a
+    // screen and a half before the first sentence. It folds there; beside the
+    // page it is open.
+    let pages = log.docs.iter().filter(|doc| !doc.is_index).count();
     let mut out = format!(
-        "<div class=\"tree\">\n<p class=\"rail-label\">{}</p>\n",
+        "<details class=\"tree\">\n\
+         <summary class=\"rail-label\">{} <span class=\"count\">{pages}</span></summary>\n",
         escape(label)
     );
     out.push_str(&branch(log, rel, here, ""));
-    out.push_str("</div>\n");
+    out.push_str("</details>\n");
+    out.push_str(&open_when_wider("62rem"));
     out
 }
 
@@ -1206,17 +1443,41 @@ fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
             .find(|doc| doc.is_index && doc.slug == folder);
         let heading = match named {
             Some(doc) => link(doc),
-            None => format!(
-                "<span>{}</span>",
-                escape(folder.rsplit('/').next().unwrap_or(&folder))
-            ),
+            None => format!("<span>{}</span>", escape(&folder_name(&folder))),
         };
-        let _ = writeln!(out, "<li class=\"folder\">{heading}");
+        // Every folder folds, and only the one holding this page starts open.
+        // Sixty pages listed in full is not navigation; four folders with
+        // their counts is.
+        let inside = log
+            .docs
+            .iter()
+            .filter(|doc| {
+                !doc.is_index
+                    && (doc.section == folder || doc.section.starts_with(&format!("{folder}/")))
+            })
+            .count();
+        let open = here == folder || here.starts_with(&format!("{folder}/"));
+        let _ = writeln!(
+            out,
+            "<li class=\"folder\"><details{}><summary>{heading}<span class=\"count\">{inside}</span></summary>",
+            if open { " open" } else { "" }
+        );
         out.push_str(&branch(log, rel, here, &folder));
-        out.push_str("</li>\n");
+        out.push_str("</details></li>\n");
     }
     out.push_str("</ul>\n");
     out
+}
+
+/// A directory's name as a heading: `formats` reads as `Formats`. Only the
+/// first letter is touched, so `iop` and `VU1` keep their own case after it.
+fn folder_name(folder: &str) -> String {
+    let name = folder.rsplit('/').next().unwrap_or(folder);
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// `section` as a direct child of `within`, or `None` if it is not one.
@@ -1253,6 +1514,7 @@ pub fn docs_index(log: &Log) -> String {
         .iter()
         .find(|doc| doc.is_index && doc.slug.is_empty());
     let mut body = String::from("<article>\n");
+    let mut headings = Vec::new();
     match root {
         Some(doc) => {
             let _ = writeln!(body, "<h1>{}</h1>", escape(&doc.title));
@@ -1266,7 +1528,9 @@ pub fn docs_index(log: &Log) -> String {
                 Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
                 None => doc.body.as_str(),
             };
-            body.push_str(&markdown_with_headings(stripped, &links).1);
+            let (found, html) = markdown_with_headings(stripped, &links);
+            headings = found;
+            body.push_str(&html);
         }
         None => {
             let _ = writeln!(body, "<h1>{}</h1>", escape(label));
@@ -1289,7 +1553,7 @@ pub fn docs_index(log: &Log) -> String {
         "../",
         "docs",
         &docs_tree(log, "../", ""),
-        "",
+        &contents_nav(&headings),
         &body,
     )
 }
@@ -1427,27 +1691,28 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
             status.name()
         );
     }
-    // The edge back to the evidence, which is the point of keeping both.
+    // The edge back to the evidence, which is the point of keeping both. As
+    // the entry's own `#19` rather than a pill each: a page resting on eleven
+    // entries wrapped two lines of pills under its title, louder than the page.
     if !doc.worklog.is_empty() {
-        // Bare blue numbers read as nothing. They are the same pills the areas
-        // use, labelled, so "from entry 6" is what the reader sees.
-        body.push_str("<span class=\"from\">from</span>");
+        body.push_str("<span class=\"from\">from</span><span class=\"evidence\">");
         for number in &doc.worklog {
             match by_number.get(number) {
                 Some(entry) => {
                     let _ = write!(
                         body,
-                        "<a class=\"chip\" href=\"{rel}{}-{}/\" title=\"{}\">entry {number}</a>",
+                        "<a href=\"{rel}{}-{}/\" title=\"{}\">#{number}</a>",
                         entry.number,
                         escape(&entry.slug),
                         escape(&entry.title)
                     );
                 }
                 None => {
-                    let _ = write!(body, "<span class=\"chip\">entry {number}</span>");
+                    let _ = write!(body, "<span>#{number}</span>");
                 }
             }
         }
+        body.push_str("</span>");
     }
     body.push_str("</p>\n");
 
@@ -1462,7 +1727,7 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
         None => doc.body.as_str(),
     };
-    let (_, html) = markdown_with_headings(stripped, &links);
+    let (headings, html) = markdown_with_headings(stripped, &links);
     body.push_str(&html);
 
     if doc.is_index {
@@ -1478,6 +1743,39 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
     }
     body.push_str("</article>\n");
 
+    // The neighbours in its own section, in the order the rail lists them: a
+    // reference is read a section at a time, and the way to the next page was
+    // back up to the tree.
+    if !doc.is_index {
+        let siblings: Vec<&DocPage> = log
+            .docs
+            .iter()
+            .filter(|other| other.section == doc.section && !other.is_index)
+            .collect();
+        if let Some(at) = siblings.iter().position(|other| other.slug == doc.slug) {
+            body.push_str("<nav class=\"pager\">\n");
+            for (class, label, other) in [
+                (
+                    "prev",
+                    "Previous",
+                    at.checked_sub(1).and_then(|i| siblings.get(i)),
+                ),
+                ("next", "Next", siblings.get(at + 1)),
+            ] {
+                if let Some(other) = other {
+                    let _ = writeln!(
+                        body,
+                        "<a class=\"{class}\" href=\"{rel}docs/{}/\"><span class=\"label\">{label}</span>{}</a>",
+                        escape(&other.slug),
+                        escape(&other.title)
+                    );
+                }
+            }
+            body.push_str("</nav>\n");
+            body.push_str(ARROW_KEYS);
+        }
+    }
+
     shell(
         log,
         &format!("{} - {}", doc.title, log.project.name),
@@ -1486,7 +1784,7 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         &rel,
         "docs",
         &docs_tree(log, &rel, &doc.slug),
-        "",
+        &contents_nav(&headings),
         &body,
     )
 }

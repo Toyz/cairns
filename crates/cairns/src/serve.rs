@@ -29,7 +29,7 @@ if(seen===null){seen=n;return}if(n!==seen){location.reload()}}).catch(function()
 
 pub fn serve(
     root: PathBuf,
-    config: Config,
+    mut config: Config,
     port: u16,
     open: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -69,6 +69,14 @@ pub fn serve(
         // preview that is ever stale is worse than one that is slow.
         let now = newest(&root, &config);
         if now != built_at {
+            // `cairns.toml` is one of the files watched, so it is read again
+            // too. It used to be read once at start: a colour changed in it
+            // triggered a rebuild, with the old colours, and looked like
+            // `[colors]` not working.
+            match crate::load_config(&root) {
+                Ok(fresh) => config = fresh,
+                Err(problem) => eprintln!("cairns: cairns.toml: {problem}"),
+            }
             match build(&root, &config) {
                 Ok(fresh) => {
                     site = fresh;

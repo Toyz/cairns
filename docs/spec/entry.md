@@ -135,9 +135,23 @@ The first heading is an `h1` repeating the number and title. Sub-headings inside
 the entry are `h2` or deeper.
 
 `**Still unknown:**` is a structured trailer wearing prose clothes. Everything
-after it on that paragraph is parsed out and collected into the log's open
-questions, so a project can ask what it does not yet know across every entry at
-once. The literal string `nothing` closes the entry out.
+after it to the end of the entry is parsed out, as markdown, and collected into
+the log's open questions, so a project can ask what it does not yet know across
+every entry at once. It may be a sentence on the same line or a list of
+questions beneath it:
+
+```markdown
+**Still unknown:**
+- whether the second table is ever read
+- what [[12]] left about the header's last word
+```
+
+The literal string `nothing` closes the entry out.
+
+A trailer used to be read only to the end of its paragraph and folded onto one
+line, which was right for a sentence and ruined a list - every item run
+together, dashes and all. A reader of an older export may still hold trailers
+in that shape.
 
 Every entry must carry the line, and `check` says so. An entry that simply
 omits it drops out of the log's open questions silently - hellbender lost

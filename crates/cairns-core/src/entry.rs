@@ -105,16 +105,26 @@ impl Entry {
         else {
             return Trailer::Missing;
         };
-        let rest = &self.body[start + STILL_UNKNOWN.len()..];
-        let end = rest.find("\n\n").unwrap_or(rest.len());
-        let text = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+        // Everything from the marker to the end of the entry, as markdown. It
+        // used to stop at the first blank line and fold what it kept onto one
+        // line, which read a sentence correctly and a list as one run-on
+        // paragraph with its dashes left in - and 151 of piney_apples' 360
+        // trailers are lists. What came after a blank line was dropped from
+        // both the trailer and the page, since the page cuts the prose here.
+        let text = self.body[start + STILL_UNKNOWN.len()..].trim();
+        let closed = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("nothing");
 
         if text.is_empty() {
             Trailer::Blank
-        } else if text.trim_end_matches('.').eq_ignore_ascii_case("nothing") {
+        } else if closed {
             Trailer::Closed
         } else {
-            Trailer::Open(text)
+            Trailer::Open(text.to_string())
         }
     }
 
@@ -335,6 +345,29 @@ mod tests {
             bytes: text.into_bytes(),
         })
         .expect("parses")
+    }
+
+    #[test]
+    fn a_trailer_that_is_a_list_keeps_its_items() {
+        let open = entry(
+            "# 1. A title\n\nProse.\n\n**Still unknown:**\n- the first thing\n- the second, \n  wrapped\n\n- a third, after a blank line\n",
+        )
+        .still_unknown()
+        .unwrap();
+        assert_eq!(
+            open,
+            "- the first thing\n- the second, \n  wrapped\n\n- a third, after a blank line"
+        );
+    }
+
+    #[test]
+    fn a_trailer_on_one_line_reads_as_before() {
+        assert_eq!(
+            entry("# 1. A title\n\nProse.\n\n**Still unknown:** whether it   holds.\n")
+                .still_unknown()
+                .as_deref(),
+            Some("whether it   holds.")
+        );
     }
 
     #[test]
