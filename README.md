@@ -41,6 +41,7 @@ prose lines identical on both sides, and renders in 95 ms.
 | `cairns index` | regenerate `WORKLOG.md` from the entries |
 | `cairns check` | numbering sound, front matter complete, filenames honest, index current |
 | `cairns open` | what the log still does not know, across every entry |
+| `cairns doc` | reference pages: `new` writes one, `cite` adds an entry to its evidence, `list` shows what needs looking at |
 | `cairns export` | the whole log as `log.json` |
 | `cairns build` | render the site, feed, search index and `log.json` |
 | `cairns serve` | the site on localhost, rebuilt as entries change |

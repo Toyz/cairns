@@ -1081,6 +1081,22 @@ fn contents_nav(headings: &[Heading]) -> String {
     toc
 }
 
+/// The reference tree's open state: open beside the page, folded on a phone,
+/// and the folders a reader opened kept open across loads. Kept in the
+/// browser, per site, because it is one reader's place in the tree and nothing
+/// anyone else needs.
+const TREE_STATE: &str = "<script>(function(tree){\
+if(!matchMedia(\"(max-width: 62rem)\").matches)tree.open=true;\
+var brand=document.querySelector(\".brand-name\");\
+var key=\"cairns-tree:\"+(brand?brand.href:location.host);\
+var saved=[];try{saved=JSON.parse(localStorage.getItem(key)||\"[]\")||[];}catch(e){}\
+var folders=[].slice.call(tree.querySelectorAll(\"details[data-folder]\"));\
+folders.forEach(function(d){if(saved.indexOf(d.dataset.folder)!==-1)d.open=true;\
+d.addEventListener(\"toggle\",function(){\
+var open=folders.filter(function(f){return f.open;}).map(function(f){return f.dataset.folder;});\
+try{localStorage.setItem(key,JSON.stringify(open));}catch(e){}});});\
+})(document.currentScript.previousElementSibling);</script>\n";
+
 /// Opens the `<details>` just before it when the screen is wider than `width`.
 ///
 /// Served closed and opened here, during parsing, so the browser lays it out
@@ -1406,7 +1422,11 @@ pub fn docs_tree(log: &Log, rel: &str, here: &str) -> String {
     );
     out.push_str(&branch(log, rel, here, ""));
     out.push_str("</details>\n");
-    out.push_str(&open_when_wider("62rem"));
+    // Opened on a screen wide enough for the rail, and the folders the reader
+    // opened before opened again - while the page is still parsing, so it is
+    // laid out once. Without this every reload, and every live rebuild under
+    // `serve`, folded back everything but the current page's folder.
+    out.push_str(TREE_STATE);
     out
 }
 
@@ -1476,7 +1496,8 @@ fn branch(log: &Log, rel: &str, here: &str, within: &str) -> String {
         let open = small || here == folder || here.starts_with(&format!("{folder}/"));
         let _ = writeln!(
             out,
-            "<li class=\"folder\"><details{}><summary>{heading}<span class=\"count\">{inside}</span></summary>",
+            "<li class=\"folder\"><details data-folder=\"{}\"{}><summary>{heading}<span class=\"count\">{inside}</span></summary>",
+            escape(&folder),
             if open { " open" } else { "" }
         );
         out.push_str(&branch(log, rel, here, &folder));

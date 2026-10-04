@@ -73,6 +73,8 @@ cairns check    # numbering sound, front matter complete, index current
 
 Run `check` before finishing. It catches a stale index, a file whose name no
 longer matches its title, a missing date, and an area nobody has heard of.
+`cairns check --fix` regenerates a stale index - after editing `cairns.toml`,
+say - and still reports everything else.
 
 ## When to write an entry
 
@@ -121,6 +123,15 @@ Sub-headings inside an entry use `##` - the entry's own title is the `#`.
 across the whole log. It is the log's list of what the project does not yet
 know, so it is worth writing honestly rather than leaving blank.
 
+When more than one thing is open, make it a list - each item one question,
+specific enough that a later entry could answer it:
+
+```markdown
+**Still unknown:**
+- whether the second table is ever read
+- what [[12]] left about the header's last word
+```
+
 ## Pointing at another entry
 
 Write `[[12]]`. It becomes a link to entry 12 carrying that entry's title, and
@@ -155,7 +166,7 @@ They are not interchangeable. Answering a question does not mean the entry that
 asked it was wrong, and `check` will reject a `resolves` aimed at an entry that
 left no question open.
 
-## Rules
+{{docs_section}}## Rules
 
 - Prose, not bullet soup. Bullets for genuine lists only - field tables,
   enumerated options.

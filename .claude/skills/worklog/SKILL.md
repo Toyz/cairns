@@ -128,6 +128,15 @@ Sub-headings inside an entry use `##` - the entry's own title is the `#`.
 across the whole log. It is the log's list of what the project does not yet
 know, so it is worth writing honestly rather than leaving blank.
 
+When more than one thing is open, make it a list - each item one question,
+specific enough that a later entry could answer it:
+
+```markdown
+**Still unknown:**
+- whether the second table is ever read
+- what [[12]] left about the header's last word
+```
+
 ## Pointing at another entry
 
 Write `[[12]]`. It becomes a link to entry 12 carrying that entry's title, and
@@ -161,6 +170,21 @@ through, naming what closed it.
 They are not interchangeable. Answering a question does not mean the entry that
 asked it was wrong, and `check` will reject a `resolves` aimed at an entry that
 left no question open.
+
+## The reference
+
+This project also keeps reference pages under `docs/` - what is true now, for
+someone who wants to use it rather than read how it was found. When an entry
+establishes something a reader would look up - a layout, a table, a rule -
+write or correct the page too (the `reference` skill says how), and cite the
+entry on it:
+
+```sh
+cairns doc cite formats/the-archive 31
+```
+
+The entry is the evidence and the page is the result. Neither replaces the
+other: an entry is never edited, a page always is.
 
 ## Rules
 

@@ -5,6 +5,7 @@
 //! everything else is designed against, so they are worth fixing early and
 //! being honest about what is not built yet.
 
+mod doc;
 mod mcp;
 mod serve;
 
@@ -13,6 +14,36 @@ use cairns_core::{Config, Entry, FsSource, Log, Source, log};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+#[derive(Subcommand)]
+enum DocCommand {
+    /// Write a new reference page and print its path.
+    New {
+        title: String,
+        /// The section (directory under the docs root) it goes in.
+        #[arg(long = "in")]
+        section: Option<String>,
+        /// How far it can be trusted: solid, partial or guess.
+        #[arg(long)]
+        status: Option<String>,
+        /// The entries that established it.
+        #[arg(long, value_delimiter = ',')]
+        from: Vec<u32>,
+        /// The page, as markdown, or `-` to read it from stdin.
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Add entries to a page's evidence.
+    Cite {
+        /// The page: `formats/pod`, `formats/pod.md` or `docs/formats/pod.md`.
+        page: String,
+        /// Entry numbers.
+        #[arg(required = true, value_delimiter = ',')]
+        entries: Vec<u32>,
+    },
+    /// Every page with its status and evidence, and what needs looking at.
+    List,
+}
 
 #[derive(Parser)]
 #[command(
@@ -49,12 +80,22 @@ enum Command {
         #[arg(long)]
         unknown: Option<String>,
     },
+    /// The reference pages: write one, cite an entry on one, list them all.
+    Doc {
+        #[command(subcommand)]
+        action: DocCommand,
+    },
     /// The number the next entry would take.
     Next,
     /// Regenerate the index from the entries.
     Index,
     /// Numbering sound, front matter complete, index current.
-    Check,
+    Check {
+        /// Regenerate a stale or missing index instead of reporting it.
+        /// Everything else is still reported, and still fails.
+        #[arg(long)]
+        fix: bool,
+    },
     /// What the log still does not know, collected across every entry.
     Open,
     /// Render the payload into a local directory.
@@ -125,7 +166,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("{}", next_number(&root.join(&config.paths.entries))?);
         }
 
-        Command::Check => {
+        Command::Check { fix } => {
             let (root, config) = load()?;
             let entries = read_entries(&root, &config)?;
             let docs = read_docs(&root, &config)?;
@@ -160,16 +201,25 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let built = Log::build(&config, entries, None);
             let wanted = cairns_site::render_index(&built, config.index.header.as_deref());
             let index = root.join(&config.paths.index);
-            match std::fs::read_to_string(&index) {
-                Ok(found) if found == wanted => {}
-                Ok(_) => problems.push(format!(
-                    "{} is stale - run `cairns index`",
-                    config.paths.index
-                )),
-                Err(_) => problems.push(format!(
-                    "{} is missing - run `cairns index`",
-                    config.paths.index
-                )),
+            let found = std::fs::read_to_string(&index).ok();
+            if found.as_deref() != Some(wanted.as_str()) {
+                let why = match &found {
+                    Some(found) => format!("is stale: {}", stale_because(found, &wanted)),
+                    None => "is missing".to_string(),
+                };
+                // The index is derived from the entries and the config and
+                // nothing else, so regenerating it can lose nothing. `--fix` does
+                // that; plain `check` stays a check, because in CI a stale index
+                // means someone forgot a step, and that is worth failing on.
+                if fix {
+                    std::fs::write(&index, &wanted)?;
+                    println!("regenerated {} - it {why}", config.paths.index);
+                } else {
+                    problems.push(format!(
+                        "{} {why} - run `cairns index`, or `cairns check --fix`",
+                        config.paths.index
+                    ));
+                }
             }
 
             for problem in &problems {
@@ -265,16 +315,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
             // Read and settled before a number is taken, so a body that is
             // refused leaves nothing behind.
-            let body = match body.as_deref() {
-                Some("-") => {
-                    use std::io::IsTerminal;
-                    if std::io::stdin().is_terminal() {
-                        eprintln!("reading the body from stdin; end it with ctrl-d");
-                    }
-                    Some(std::io::read_to_string(std::io::stdin())?)
-                }
-                other => other.map(str::to_string),
-            };
+            let body = read_body(body)?;
             let prose = compose_body(body.as_deref(), unknown.as_deref())?;
 
             let dir = root.join(&config.paths.entries);
@@ -332,32 +373,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let config = Config::parse(&std::fs::read_to_string(&config_path)?)?;
             std::fs::create_dir_all(root.join(&config.paths.entries))?;
 
-            let skill = root.join(".claude/skills/worklog/SKILL.md");
-            std::fs::create_dir_all(skill.parent().unwrap())?;
-            let existing = std::fs::read_to_string(&skill).ok();
-            match existing.as_deref() {
-                // A skill that predates cairns is entirely hand-written, and
-                // rewriting it would throw away exactly the rules worth keeping.
-                // Adoption asks rather than assumes.
-                Some(text) if !text.contains(SKILL_MARKER) => {
-                    println!(
-                        "kept .claude/skills/worklog/SKILL.md - it has no {SKILL_MARKER} marker.\n\
-                         Everything below that marker is what init preserves, so put it above \
-                         the parts\nthis project wrote and run init again."
-                    );
-                }
-                _ => {
-                    let (rendered, preserved) = render_skill(&config, existing.as_deref());
-                    std::fs::write(&skill, rendered)?;
-                    println!(
-                        "wrote .claude/skills/worklog/SKILL.md{}",
-                        if preserved {
-                            " (project section kept)"
-                        } else {
-                            ""
-                        }
-                    );
-                }
+            write_skill(&root, "worklog", |existing| render_skill(&config, existing))?;
+            // The reference has a skill of its own, because writing a page is a
+            // different job from writing an entry - and only where there is a
+            // reference to write.
+            if config.docs.is_some() {
+                write_skill(&root, "reference", |existing| {
+                    render_reference_skill(&config, existing)
+                })?;
             }
 
             // Adoption preserves what is there, the same way it freezes slugs.
@@ -463,6 +486,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 docs/spec/publish.md does the same job today"
                         .into());
                 }
+            }
+        }
+
+        Command::Doc { action } => {
+            let (root, config) = load()?;
+            match action {
+                DocCommand::New {
+                    title,
+                    section,
+                    status,
+                    from,
+                    body,
+                } => {
+                    let body = read_body(body)?;
+                    doc::new(
+                        &root,
+                        &config,
+                        &title,
+                        section.as_deref(),
+                        status.as_deref(),
+                        &from,
+                        body,
+                    )?;
+                }
+                DocCommand::Cite { page, entries } => doc::cite(&root, &config, &page, &entries)?,
+                DocCommand::List => doc::list(&root, &config)?,
             }
         }
 
@@ -862,6 +911,106 @@ fn trimmed(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Why an index differs from the one the log would generate now: its own table
+/// of entries, or only what comes before it - the header and description,
+/// which live in `cairns.toml`. An index stale from a config edit is expected
+/// and harmless, and the message should not read like a problem with entries.
+fn stale_because(found: &str, wanted: &str) -> String {
+    let table = |text: &str| -> Vec<String> {
+        text.lines()
+            .skip_while(|line| !line.starts_with("| # |"))
+            .map(str::to_string)
+            .collect()
+    };
+    let (have, want) = (table(found), table(wanted));
+    if have == want {
+        return "its header changed in cairns.toml since it was generated".into();
+    }
+    // Rows by entry number, so a renamed entry is one change, not a row gone
+    // and a row added.
+    let rows = |lines: &[String]| -> std::collections::BTreeMap<String, String> {
+        lines
+            .iter()
+            .skip(2)
+            .filter_map(|row| {
+                let number = row.trim_start_matches('|').split('|').next()?.trim();
+                Some((number.to_string(), row.clone()))
+            })
+            .collect()
+    };
+    let (have, want) = (rows(&have), rows(&want));
+    let added = want.keys().filter(|n| !have.contains_key(*n)).count();
+    let changed = want
+        .iter()
+        .filter(|(n, row)| have.get(*n).is_some_and(|old| old != *row))
+        .count()
+        + have.keys().filter(|n| !want.contains_key(*n)).count();
+    let entries = |n: usize| {
+        if n == 1 {
+            "1 entry is".to_string()
+        } else {
+            format!("{n} entries are")
+        }
+    };
+    match (added, changed) {
+        (0, 0) => "its layout differs from the one this version writes".into(),
+        (added, 0) => format!("{} not listed yet", entries(added)),
+        (0, changed) => format!("{} not as it lists them", entries(changed)),
+        (added, changed) => format!("{} not listed yet and {} changed", entries(added), changed),
+    }
+}
+
+/// A `--body` value: the text itself, or `-` for stdin.
+fn read_body(body: Option<String>) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    Ok(match body.as_deref() {
+        Some("-") => {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                eprintln!("reading the body from stdin; end it with ctrl-d");
+            }
+            Some(std::io::read_to_string(std::io::stdin())?)
+        }
+        _ => body,
+    })
+}
+
+/// Write `.claude/skills/<name>/SKILL.md`, keeping its hand-written half.
+///
+/// A skill that predates cairns is entirely hand-written, and rewriting it
+/// would throw away exactly the rules worth keeping, so one without the marker
+/// is left alone. Adoption asks rather than assumes.
+fn write_skill(
+    root: &Path,
+    name: &str,
+    render: impl FnOnce(Option<&str>) -> (String, bool),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let skill = root.join(format!(".claude/skills/{name}/SKILL.md"));
+    std::fs::create_dir_all(skill.parent().unwrap())?;
+    let existing = std::fs::read_to_string(&skill).ok();
+    match existing.as_deref() {
+        Some(text) if !text.contains(SKILL_MARKER) => {
+            println!(
+                "kept .claude/skills/{name}/SKILL.md - it has no {SKILL_MARKER} marker.\n\
+                 Everything below that marker is what init preserves, so put it above \
+                 the parts\nthis project wrote and run init again."
+            );
+        }
+        _ => {
+            let (rendered, preserved) = render(existing.as_deref());
+            std::fs::write(&skill, rendered)?;
+            println!(
+                "wrote .claude/skills/{name}/SKILL.md{}",
+                if preserved {
+                    " (project section kept)"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Everything below this line in a generated skill is the project's own.
 const SKILL_MARKER: &str = "<!-- cairns:project -->";
 
@@ -897,8 +1046,51 @@ fn render_skill(config: &Config, existing: Option<&str>) -> (String, bool) {
         .replace("{{first_area}}", first)
         .replace("{{areas_typed}}", &format!("{first},{second}"))
         .replace("{{areas_written}}", &format!("{first}, {second}"))
-        .replace("{{areas}}", &areas);
+        .replace("{{areas}}", &areas)
+        .replace("{{docs_section}}", &docs_section(config));
 
+    keep_project_section(rendered, existing)
+}
+
+/// The worklog skill's part about the reference, for a project that keeps one.
+/// A project without `[docs]` gets nothing, rather than instructions for pages
+/// it does not have.
+fn docs_section(config: &Config) -> String {
+    let Some(docs) = &config.docs else {
+        return String::new();
+    };
+    format!(
+        "## The reference\n\n\
+         This project also keeps reference pages under `{dir}/` - what is true now, for\n\
+         someone who wants to use it rather than read how it was found. When an entry\n\
+         establishes something a reader would look up - a layout, a table, a rule -\n\
+         write or correct the page too (the `reference` skill says how), and cite the\n\
+         entry on it:\n\n\
+         ```sh\n\
+         cairns doc cite formats/the-archive 31\n\
+         ```\n\n\
+         The entry is the evidence and the page is the result. Neither replaces the\n\
+         other: an entry is never edited, a page always is.\n\n",
+        dir = docs.dir
+    )
+}
+
+/// The reference skill, for a project with `[docs]`.
+fn render_reference_skill(config: &Config, existing: Option<&str>) -> (String, bool) {
+    let dir = config
+        .docs
+        .as_ref()
+        .map(|docs| docs.dir.as_str())
+        .unwrap_or("docs");
+    let rendered = include_str!("../templates/REFERENCE.md")
+        .replace("{{project}}", &config.project.name)
+        .replace("{{docs}}", dir);
+    keep_project_section(rendered, existing)
+}
+
+/// A freshly rendered skill, with the hand-written half of an existing one -
+/// everything below the marker - carried over.
+fn keep_project_section(rendered: String, existing: Option<&str>) -> (String, bool) {
     match existing.and_then(|text| text.split_once(SKILL_MARKER)) {
         Some((_, kept)) => {
             let (generic, _) = rendered.split_once(SKILL_MARKER).unwrap_or((&rendered, ""));
@@ -1086,6 +1278,34 @@ mod tests {
 
     fn config() -> Config {
         Config::parse(&starter_config("A Project")).expect("the starter config is valid")
+    }
+
+    #[test]
+    fn a_stale_index_says_whether_the_config_or_the_entries_moved() {
+        let index = |header: &str, rows: &[&str]| {
+            format!(
+                "{header}\n\n2 entries: spec 2.\n\n| # | Entry | Date | Area |\n| ---: | --- | --- | --- |\n{}\n",
+                rows.join("\n")
+            )
+        };
+        let one = "| 1 | [A](worklog/0001-a.md) | 2026-09-20 | spec |";
+        let two = "| 2 | [B](worklog/0002-b.md) | 2026-09-21 | spec |";
+        assert_eq!(
+            stale_because(&index("# Old", &[one, two]), &index("# New", &[one, two])),
+            "its header changed in cairns.toml since it was generated"
+        );
+        assert_eq!(
+            stale_because(&index("# Log", &[one]), &index("# Log", &[one, two])),
+            "1 entry is not listed yet"
+        );
+        let renamed = "| 2 | [B, renamed](worklog/0002-b.md) | 2026-09-21 | spec |";
+        assert_eq!(
+            stale_because(
+                &index("# Log", &[one, two]),
+                &index("# Log", &[one, renamed])
+            ),
+            "1 entry is not as it lists them"
+        );
     }
 
     #[test]
