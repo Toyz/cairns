@@ -74,6 +74,17 @@ pub fn code_blocks<'a>(events: impl IntoIterator<Item = Event<'a>>) -> Vec<Event
     out
 }
 
+/// Code from a file, highlighted by the file's extension - for an embedded
+/// code reference rather than a fenced block. Plain when the extension has no
+/// grammar.
+pub fn file(code: &str, path: &str) -> String {
+    let extension = path.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
+    match syntax_for(extension) {
+        Some(syntax) => render(syntax, extension, code),
+        None => format!("<pre><code>{}</code></pre>\n", crate::html::escape(code)),
+    }
+}
+
 fn render(syntax: &SyntaxReference, info: &str, code: &str) -> String {
     let mut generator = ClassedHTMLGenerator::new_with_class_style(
         syntax,

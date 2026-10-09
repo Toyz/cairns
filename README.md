@@ -36,12 +36,17 @@ prose lines identical on both sides, and renders in 95 ms.
 | | |
 | --- | --- |
 | `cairns next` | the number the next entry takes |
-| `cairns init` | set up a repo: config, skill, and freeze existing slugs |
+| `cairns init` | set up a repo: config, skills, and freeze existing slugs; `--hooks` adds a hook that starts the clock on every prompt |
+| `cairns start` | start the clock on a piece of work; `new` records how long it took |
 | `cairns new` | start an entry, numbered and dated, index refreshed |
 | `cairns index` | regenerate `WORKLOG.md` from the entries |
 | `cairns check` | numbering sound, front matter complete, filenames honest, index current |
 | `cairns open` | what the log still does not know, across every entry |
-| `cairns doc` | reference pages: `new` writes one, `cite` adds an entry to its evidence, `list` shows what needs looking at |
+| `cairns ls` | the entries a query matches: `cairns ls :battle and open and not superseded`, `took gt 2h` |
+| `cairns refs` | where an entry is mentioned - other entries, reference pages, and comments in the code |
+| `cairns renumber` | give an entry a new number, for two branches that wrote the same one |
+| `cairns doc` | reference pages: `new` writes one, `cite` adds an entry to its evidence, `list` shows what needs looking at (`--strict` fails on it, for CI) |
+| `cairns update` | refresh the skills, the clock hook and the index after upgrading cairns |
 | `cairns export` | the whole log as `log.json` |
 | `cairns build` | render the site, feed, search index and `log.json` |
 | `cairns serve` | the site on localhost, rebuilt as entries change |
@@ -103,8 +108,9 @@ cairns mcp --write    # also allows writing entries
 ```
 
 A stdio MCP server, for a host with no shell. Tools cover listing, reading,
-searching, the open questions and `check`; `--write` adds one for writing an
-entry, and its schema offers only the areas this project declares. Resources -
+searching, the open questions, `check` and the clock; `--write` adds tools for
+starting the clock and writing an entry, and the entry's schema offers only the
+areas this project declares. Resources -
 `worklog://entry/50`, `worklog://open`, `worklog://index`, `worklog://log.json` -
 let a model pull one entry into context instead of reading the whole log.
 
@@ -114,8 +120,10 @@ let a model pull one entry into context instead of reading the whole log.
 } }
 ```
 
-In a host that already has a shell this adds little - `cairns init` writes a
-skill that teaches the CLI, which is enough. It earns its place where there is
+In a host that already has a shell this adds little - `cairns init` writes
+skills that teach the CLI, which is enough: `worklog` for writing entries,
+`clock` for starting the clock when work begins, and `reference` for the
+reference pages when the project keeps them. It earns its place where there is
 no terminal.
 
 ## Releasing

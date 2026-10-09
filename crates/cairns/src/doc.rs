@@ -159,7 +159,8 @@ fn with_citations(text: &str, cited: &[u32], path: &Path) -> Result<(String, Vec
 }
 
 /// Every page, how sure it is, what it rests on, and what needs looking at.
-pub fn list(root: &Path, config: &Config) -> Result<()> {
+/// Returns how many pages were flagged, so `--strict` can fail on them.
+pub fn list(root: &Path, config: &Config) -> Result<usize> {
     let dir = docs_dir(config)?;
     let entries = crate::read_entries(root, config)?;
     let docs = crate::read_docs(root, config)?;
@@ -177,7 +178,7 @@ pub fn list(root: &Path, config: &Config) -> Result<()> {
     pages.sort_by_key(|doc| doc.slug(dir));
     if pages.is_empty() {
         println!("no pages under {dir}/ - `cairns doc new` writes one");
-        return Ok(());
+        return Ok(0);
     }
 
     let width = pages
@@ -217,6 +218,14 @@ pub fn list(root: &Path, config: &Config) -> Result<()> {
         if doc.status.is_none() {
             notes.push("no status - solid, partial or guess?".to_string());
         }
+        // A page is the current truth, so code it names that is no longer
+        // there means the page is out of date - unlike an entry, which is
+        // allowed to have pointed at where code used to be.
+        for code in cairns_core::entry::code_references(&doc.body) {
+            if let Some(why) = crate::code::resolve(root, &code, false).missing {
+                notes.push(format!("{} - {why}", code.key()));
+            }
+        }
         if !notes.is_empty() {
             flagged += 1;
         }
@@ -238,7 +247,7 @@ pub fn list(root: &Path, config: &Config) -> Result<()> {
         count(Status::Partial),
         count(Status::Guess)
     );
-    Ok(())
+    Ok(flagged)
 }
 
 /// A page named by its slug (`formats/pod`), its path under the docs root

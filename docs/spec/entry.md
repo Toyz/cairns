@@ -23,6 +23,32 @@ Putting the number in the filename means the next number is a directory
 listing, never a read of the entries themselves, so `cairns new` costs the same
 on entry 5 and entry 5,000.
 
+## Two entries with one number
+
+Numbers are assigned by counting, so two branches - or two agents in separate
+worktrees - that each write the next entry write the same number, and `check`
+says so after they merge. `cairns renumber <path>` moves one to the next free
+number: its `number:`, its heading, its file name and the folder of its
+attachments. Its slug, which is its URL, stays. Other entries that name the old
+number are listed rather than changed - after a merge, `[[34]]` elsewhere may
+mean either entry, and only someone who knows which can say.
+
+## Attachments
+
+Files kept with an entry - a screenshot, a capture - go in a folder named like
+it, beside it:
+
+```
+worklog/0050-the-table.md
+worklog/0050-the-table/screenshot.png
+```
+
+The entry links to them relative to itself, `![the hold](0050-the-table/screenshot.png)`,
+which is also what renders on a forge. The site serves them beside the entry's
+page. `cairns new --attach screenshot.png` copies a file in and points the
+body's `](screenshot.png)` at it, since the number is not known until the
+entry is written.
+
 ## The slug
 
 Derived from the title: Unicode NFKD, non-alphanumerics collapsed to `-`,
@@ -70,7 +96,10 @@ promise - the subset is the spec.
 | `summary` | no | text | one sentence; the index blurb and link preview |
 | `slug` | no | text | overrides the derived slug; frozen once published |
 | `supersedes` | no | list of integers | entries this one corrects or revisits |
-| `resolves` | no | list of integers | entries whose open question this one answers |
+| `resolves` | no | list of questions | questions this one answers: `54`, or `54.2` for one question of a list |
+| `carries` | no | list of questions | questions this one takes over, unanswered, in the same form |
+| `started` | no | timestamp | when the work began, local with its offset |
+| `took` | no | duration | how long it took: `1h 23m`, `45m`, `2h` |
 
 Unknown fields are preserved and passed through to `log.json` untouched. A
 future field must never be a breaking change.
@@ -93,6 +122,101 @@ A question with a `resolves` pointing at it leaves the log's open questions. It
 stays on the entry that asked it, struck through, naming what closed it.
 `check` rejects a `resolves` aimed at an entry that left no question open,
 because that is almost always the wrong number and nothing else would catch it.
+
+## How long it took
+
+`started` and `took` are written by the tool, not by hand: `cairns start`
+stamps the time, and `cairns new` records it and the minutes since. The writer
+is usually a model, and a model asked how long something took gives a
+confident number that is wrong; a clock does not.
+
+```
+started: 2026-10-08T14:02:11-06:00
+took: 1h 23m
+```
+
+What `took` measures is **wall-clock**, start to entry - every break included.
+It is documented as that and claims nothing more; a session that spanned a
+night is corrected by hand, or recorded with `cairns new --took` instead of the
+clock. A duration is hours then minutes, each at most once - `90` alone is
+refused, since it reads as either.
+
+An entry without `took` did not record it. Totals count only entries that did;
+an entry that says nothing is not counted as zero.
+
+## Answering, and carrying, one question
+
+A trailer written as a list is a list of questions, numbered from 1 in the
+order written - the entry's page shows the numbers. `resolves: 54.2` answers
+the second question of entry 54 and leaves the others open; `resolves: 54`
+answers all of it.
+
+`carries` is for an entry that gathers open questions into its own list
+without answering them - a triage pass:
+
+```
+carries: 2, 4, 15.1, 15.3
+```
+
+The questions it carries are no longer open *there*; they are open here, in
+the carrying entry's own trailer. The entries that asked them keep them, not
+struck through - nothing was answered - pointing at where they went. Using
+`resolves` for this, which was the only way to say it before `carries`
+existed, tells every reader of the older entries that their questions were
+answered.
+
+`check` rejects either aimed at an entry that left nothing open, at a
+question past the end of a list, or at a question number on a trailer that is
+not a list.
+
+## Referring to code
+
+```markdown
+The trailer is split by [[src/entry.rs#question_items]].
+Its numbers come from [[src/entry.rs:300-310|these lines]].
+As it was then: [[src/entry.rs#question_items@3fbdc65]].
+
+![[src/entry.rs#question_items]]
+```
+
+A `[[...]]` whose target has a `/` or a `.` in it is code in the repository,
+not an entry:
+
+| form | names |
+| --- | --- |
+| `path` | the file |
+| `path:12` | a line |
+| `path:12-40` | a block of lines |
+| `path#name` | a definition, found by name |
+| `...@rev` | as it was at a commit |
+| `...\|words` | shown as the words |
+
+`#name` is the form to prefer: lines move as code changes, and an entry that
+pointed at lines 300-310 will point at something else a month later. A name
+is found where it is defined - after `fn`, `struct`, `class`, `def` and the
+like - and the reference spans its block, by braces or by indentation. `@rev`
+pins it to a commit, read with `git show`.
+
+With a `!` in front the code is embedded rather than linked: shown in the
+entry, highlighted, under a caption linking to where it lives - at most 200
+lines of it. `files:` takes the same forms, and links to the lines.
+
+References are resolved when the site is built, against the checkout, and
+carried in `log.json` so a renderer needs no repository. One that no longer
+resolves is shown struck through with the reason, not as a broken link; an
+entry is not wrong for having pointed at where code used to be, so `check`
+does not fail on it. `cairns new` warns while the entry can still be fixed,
+and `cairns doc list` flags it on a reference page, which is meant to be
+current.
+
+## Code that refers back
+
+Code refers to the log too - "see worklog 50" in a comment, "(worklog 361)" in
+a message. The site finds those in the repository's tracked files - `worklog`
+followed by a number, or a path into the entries directory - and an entry's
+page lists them as "Mentioned in", each linking to its line; `cairns refs 50`
+prints them, with every other place that names the entry. An entry's page also
+lists the later entries that link to it with `[[N]]`.
 
 ## Referring to another entry
 
@@ -146,7 +270,16 @@ questions beneath it:
 - what [[12]] left about the header's last word
 ```
 
-The literal string `nothing` closes the entry out.
+A trailer whose first sentence is `nothing` closes the entry out. Anything
+after that sentence is a note - kept on the page, not collected as a question:
+
+```markdown
+**Still unknown:** nothing. The test runs on Mutation only; the other volumes
+share the same path.
+```
+
+`nothing about the offset. Whether ...` is not closed: "nothing about" is a
+qualifier, and what follows it is still open.
 
 A trailer used to be read only to the end of its paragraph and folded onto one
 line, which was right for a sentence and ruined a list - every item run

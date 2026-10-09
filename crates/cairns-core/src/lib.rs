@@ -15,6 +15,7 @@ pub mod doc;
 pub mod entry;
 pub mod error;
 pub mod log;
+pub mod query;
 pub mod source;
 
 /// The spec version this crate reads and writes. See `docs/spec/README.md`.

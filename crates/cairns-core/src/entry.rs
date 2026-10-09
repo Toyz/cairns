@@ -27,11 +27,24 @@ pub struct FrontMatter {
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supersedes: Vec<u32>,
-    /// Entries whose open question this one answers. Distinct from
-    /// `supersedes`: answering a question does not mean the entry that asked
-    /// it was wrong.
+    /// Questions this one answers: an earlier entry's whole trailer (`54`) or
+    /// one question of its list (`54.2`). Distinct from `supersedes`:
+    /// answering a question does not mean the entry that asked it was wrong.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resolves: Vec<u32>,
+    pub resolves: Vec<QuestionRef>,
+    /// Questions this one takes over unanswered - a triage entry gathering
+    /// what is open into one list. Not `resolves`: nothing was answered, and
+    /// the entry that asked keeps its question, pointing here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries: Vec<QuestionRef>,
+    /// When the work began, as `cairns start` stamped it: a local timestamp
+    /// with its offset. Text, because it is a record of what the clock said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// How long the work took, in minutes - wall-clock from `cairns start` to
+    /// `cairns new`, or whatever the writer gave instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took: Option<u32>,
     /// Keys the spec does not define, passed through untouched so a project can
     /// carry its own metadata without forking the format.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -112,12 +125,14 @@ impl Entry {
         // trailers are lists. What came after a blank line was dropped from
         // both the trailer and the page, since the page cuts the prose here.
         let text = self.body[start + STILL_UNKNOWN.len()..].trim();
-        let closed = text
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim_end_matches('.')
-            .eq_ignore_ascii_case("nothing");
+        // Closed when the first sentence is `nothing`. Whatever follows it is
+        // a note - "nothing. The test runs on Mutation only." - not a question.
+        // Requiring the whole trailer to be the one word listed every entry
+        // that said nothing and then explained as an open question, starting
+        // "nothing.", and there was no way to close one and keep the note.
+        let first = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let first = first.split(['.', ';', '\n']).next().unwrap_or("").trim();
+        let closed = first.eq_ignore_ascii_case("nothing");
 
         if text.is_empty() {
             Trailer::Blank
@@ -196,7 +211,32 @@ impl FrontMatter {
                 .transpose()
         };
         let supersedes = numbers(&mut fields, "supersedes")?.unwrap_or_default();
-        let resolves = numbers(&mut fields, "resolves")?.unwrap_or_default();
+        let questions = |fields: &mut BTreeMap<String, String>, key: &'static str| {
+            fields
+                .remove(key)
+                .map(|value| {
+                    list(&value)
+                        .iter()
+                        .map(|q| {
+                            q.parse::<QuestionRef>().map_err(|_| {
+                                format!(
+                                    "`{key}` has {q:?} in it, which is not an entry number or \
+                                     one question of one (`54.2`)"
+                                )
+                            })
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                })
+                .transpose()
+        };
+        let resolves = questions(&mut fields, "resolves")?.unwrap_or_default();
+        let carries = questions(&mut fields, "carries")?.unwrap_or_default();
+
+        let took = fields
+            .remove("took")
+            .filter(|took| !took.is_empty())
+            .map(|took| parse_duration(&took))
+            .transpose()?;
 
         Ok(FrontMatter {
             number,
@@ -208,6 +248,9 @@ impl FrontMatter {
             slug: fields.remove("slug").filter(|s| !s.is_empty()),
             supersedes,
             resolves,
+            carries,
+            started: fields.remove("started").filter(|s| !s.is_empty()),
+            took,
             extra: fields,
         })
     }
@@ -262,6 +305,141 @@ pub fn split_front_matter(text: &str) -> Option<(&str, &str)> {
         .strip_prefix('\n')
         .unwrap_or(&rest[end + 4..]);
     Some((&rest[..end], after))
+}
+
+/// A question in an earlier entry: its whole trailer, or one question of a
+/// trailer written as a list, counted from 1 as the entry's page numbers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct QuestionRef {
+    pub entry: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<u32>,
+}
+
+impl std::str::FromStr for QuestionRef {
+    type Err = ();
+    fn from_str(text: &str) -> std::result::Result<Self, ()> {
+        let (entry, item) = match text.trim().split_once('.') {
+            Some((entry, item)) => (entry, Some(item.parse::<u32>().map_err(|_| ())?)),
+            None => (text.trim(), None),
+        };
+        if item == Some(0) {
+            return Err(());
+        }
+        Ok(QuestionRef {
+            entry: entry.parse().map_err(|_| ())?,
+            item,
+        })
+    }
+}
+
+impl std::fmt::Display for QuestionRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.item {
+            Some(item) => write!(f, "{}.{item}", self.entry),
+            None => write!(f, "{}", self.entry),
+        }
+    }
+}
+
+/// A trailer split into what comes before its list and the list's questions,
+/// each with whatever continues it. A trailer that is not a list has none.
+///
+/// Only items at the start of a line count, so a list inside a question - or a
+/// dash in a sentence - is part of the question it is in.
+pub fn question_items(trailer: &str) -> (String, Vec<String>) {
+    let starts = |line: &str| {
+        line.starts_with("- ")
+            || line.starts_with("* ")
+            || line.starts_with("+ ")
+            || line.split_once(['.', ')']).is_some_and(|(n, rest)| {
+                !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with(' ')
+            })
+    };
+    let mut preamble = Vec::new();
+    let mut items: Vec<Vec<&str>> = Vec::new();
+    for line in trailer.lines() {
+        if starts(line) {
+            items.push(vec![line]);
+        } else if let Some(current) = items.last_mut() {
+            current.push(line);
+        } else {
+            preamble.push(line);
+        }
+    }
+    let items = items
+        .into_iter()
+        .map(|lines| {
+            let first = lines[0];
+            let marker = first.find(' ').map(|at| at + 1).unwrap_or(0);
+            let mut text = first[marker..].to_string();
+            for line in &lines[1..] {
+                text.push('\n');
+                text.push_str(line);
+            }
+            text.trim().to_string()
+        })
+        .collect();
+    (preamble.join("\n").trim().to_string(), items)
+}
+
+/// Whether a trailer opens with "nothing" and then qualifies it - `nothing
+/// about the offset`, `nothing new from this entry` - which reads as closed and
+/// is not: what follows may be a real question, and no reader of the text can
+/// tell which. `nothing.` closes an entry; anything else names what is open.
+pub fn hedged_nothing(trailer: &str) -> bool {
+    let text = trailer.trim_start();
+    let Some(rest) = text
+        .get(..7)
+        .filter(|w| w.eq_ignore_ascii_case("nothing"))
+        .map(|_| &text[7..])
+    else {
+        return false;
+    };
+    rest.starts_with([' ', '\t'])
+        && !rest.trim_start().starts_with(['.', ';'])
+        && !rest.trim().is_empty()
+}
+
+/// A duration as a writer puts it - `1h 23m`, `45m`, `2h` - in minutes.
+///
+/// Hours and minutes only, each at most once, hours first. Strict, because a
+/// number that reads two ways - is `90` minutes or hours? - is a number that is
+/// wrong half the time, and this one ends up summed across a whole log.
+pub fn parse_duration(text: &str) -> std::result::Result<u32, String> {
+    let bad = || format!("`took` is {text:?}; write it as 1h 23m, 45m or 2h");
+    let mut minutes = 0u32;
+    let mut seen_hours = false;
+    let mut seen_minutes = false;
+    for part in text.split_whitespace() {
+        let (number, unit) =
+            part.split_at(part.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?);
+        let number: u32 = number.parse().map_err(|_| bad())?;
+        match unit {
+            "h" if !seen_hours && !seen_minutes => {
+                seen_hours = true;
+                minutes += number * 60;
+            }
+            "m" if !seen_minutes => {
+                seen_minutes = true;
+                minutes += number;
+            }
+            _ => return Err(bad()),
+        }
+    }
+    if !seen_hours && !seen_minutes {
+        return Err(bad());
+    }
+    Ok(minutes)
+}
+
+/// Minutes as a person writes them: `1h 23m`, `45m`, `2h`.
+pub fn format_duration(minutes: u32) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
+    }
 }
 
 /// A comma-separated field, trimmed, with the empties dropped.
@@ -345,6 +523,169 @@ mod tests {
             bytes: text.into_bytes(),
         })
         .expect("parses")
+    }
+
+    #[test]
+    fn a_code_reference_is_a_path_a_range_or_a_name() {
+        let parse = |s: &str| CodeRef::parse(s);
+        let r = parse("src/entry.rs:120-158@3fbdc65|the scanner").unwrap();
+        assert_eq!(
+            (
+                r.path.as_str(),
+                r.lines,
+                r.rev.as_deref(),
+                r.label.as_deref()
+            ),
+            (
+                "src/entry.rs",
+                Some((120, 158)),
+                Some("3fbdc65"),
+                Some("the scanner")
+            )
+        );
+        assert_eq!(
+            parse("src/entry.rs#question_items")
+                .unwrap()
+                .symbol
+                .as_deref(),
+            Some("question_items")
+        );
+        assert_eq!(parse("Cargo.toml").unwrap().lines, None);
+        assert_eq!(parse("src/a.rs:7").unwrap().key(), "src/a.rs:7");
+        for not in [
+            "12",
+            "area",
+            "publish",
+            "https://example.com/x.rs",
+            "a b.rs",
+            "/etc/passwd",
+        ] {
+            assert!(parse(not).is_none(), "{not:?} parsed");
+        }
+        // A bad range is not a range: the colon stays part of the path.
+        assert_eq!(parse("src/a.rs:40-12").unwrap().lines, None);
+    }
+
+    #[test]
+    fn code_references_are_found_beside_entry_references_and_not_in_code() {
+        let body = "See [[12]], [[src/a.rs#parse]] and\n![[src/b.rs:3-9]]\n\n`[[src/c.rs]]` stays.\n\n```\n[[src/d.rs]]\n```\n";
+        let found = code_references(body);
+        assert_eq!(
+            found.iter().map(|c| (c.key(), c.embed)).collect::<Vec<_>>(),
+            vec![
+                ("src/a.rs#parse".to_string(), false),
+                ("src/b.rs:3-9".to_string(), true)
+            ]
+        );
+        assert_eq!(references(body).len(), 1);
+        let rewritten = rewrite_code_references(body, &|c| Some(format!("<{}>", c.key())));
+        assert!(
+            rewritten.contains("See [[12]], <src/a.rs#parse> and\n<src/b.rs:3-9>\n"),
+            "{rewritten}"
+        );
+    }
+
+    #[test]
+    fn a_question_is_an_entry_or_one_item_of_its_list() {
+        assert_eq!(
+            "54".parse(),
+            Ok(QuestionRef {
+                entry: 54,
+                item: None
+            })
+        );
+        assert_eq!(
+            "54.2".parse(),
+            Ok(QuestionRef {
+                entry: 54,
+                item: Some(2)
+            })
+        );
+        for bad in ["54.0", "x", "54.x", "", "54.2.1"] {
+            assert!(bad.parse::<QuestionRef>().is_err(), "{bad:?} parsed");
+        }
+        assert_eq!(
+            QuestionRef {
+                entry: 54,
+                item: Some(2)
+            }
+            .to_string(),
+            "54.2"
+        );
+    }
+
+    #[test]
+    fn a_trailer_list_splits_into_its_questions() {
+        let (preamble, items) = question_items(
+            "Two things are untested:\n- the first,\n  wrapped\n- the second - with a dash\n\n1. a third, numbered",
+        );
+        assert_eq!(preamble, "Two things are untested:");
+        assert_eq!(
+            items,
+            vec![
+                "the first,\n  wrapped",
+                "the second - with a dash",
+                "a third, numbered"
+            ]
+        );
+        assert_eq!(
+            question_items("just a sentence."),
+            ("just a sentence.".to_string(), vec![])
+        );
+    }
+
+    #[test]
+    fn nothing_with_a_qualifier_is_hedged() {
+        assert!(hedged_nothing("nothing about the offset. Whether ..."));
+        assert!(hedged_nothing("Nothing new from this entry."));
+        assert!(!hedged_nothing("nothing"));
+        assert!(!hedged_nothing("nothing. The test runs on Mutation only."));
+        assert!(!hedged_nothing("nothing ; settled by [[4]]"));
+        assert!(!hedged_nothing("nothingness of the void"));
+        assert!(!hedged_nothing("whether nothing reads it"));
+    }
+
+    #[test]
+    fn nothing_closes_an_entry_even_with_a_note_after_it() {
+        let trailer = |text: &str| {
+            entry(&format!(
+                "# 1. A title\n\nProse.\n\n**Still unknown:** {text}\n"
+            ))
+            .trailer()
+        };
+        assert_eq!(trailer("nothing"), Trailer::Closed);
+        assert_eq!(trailer("Nothing."), Trailer::Closed);
+        assert_eq!(
+            trailer("nothing. The session test runs on Mutation only."),
+            Trailer::Closed
+        );
+        assert_eq!(
+            trailer("nothing; the rest is settled by [[4]]."),
+            Trailer::Closed
+        );
+        // "nothing about X" is a qualifier, and what follows is a real question.
+        assert!(matches!(
+            trailer("nothing about these two paths. Whether any dungeon has room 15."),
+            Trailer::Open(_)
+        ));
+        assert!(matches!(
+            trailer("nothing compares the pictures with the game's."),
+            Trailer::Open(_)
+        ));
+    }
+
+    #[test]
+    fn a_duration_reads_one_way_only() {
+        assert_eq!(parse_duration("1h 23m"), Ok(83));
+        assert_eq!(parse_duration("45m"), Ok(45));
+        assert_eq!(parse_duration("2h"), Ok(120));
+        assert_eq!(parse_duration("0m"), Ok(0));
+        for bad in ["90", "1.5h", "23m 1h", "1h 1h", "1d", "", "an hour"] {
+            assert!(parse_duration(bad).is_err(), "{bad:?} parsed");
+        }
+        for minutes in [0, 7, 60, 83, 600] {
+            assert_eq!(parse_duration(&format_duration(minutes)), Ok(minutes));
+        }
     }
 
     #[test]
@@ -516,7 +857,7 @@ pub struct Reference {
 pub fn rewrite_references(body: &str, link: &dyn Fn(&Reference) -> Option<String>) -> String {
     let mut out = String::with_capacity(body.len());
     scan(body, |found| match found {
-        Found::Text(text) => out.push_str(text),
+        Found::Text(text) | Found::Code(text, _) => out.push_str(text),
         Found::Reference(whole, reference) => match link(&reference) {
             Some(destination) => {
                 let label = reference
@@ -534,6 +875,107 @@ pub fn rewrite_references(body: &str, link: &dyn Fn(&Reference) -> Option<String
 enum Found<'a> {
     Text(&'a str),
     Reference(&'a str, Reference),
+    Code(&'a str, CodeRef),
+}
+
+/// A reference to code in the repository: `[[src/a.rs]]`, a line
+/// `[[src/a.rs:12]]`, a block `[[src/a.rs:12-40]]`, or a definition by name
+/// `[[src/a.rs#parse_header]]` - which, unlike line numbers, still finds the
+/// code after it moves. `@rev` pins it to a commit; `|words` labels it; a `!`
+/// before it embeds the code itself rather than linking to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeRef {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embed: bool,
+}
+
+impl CodeRef {
+    /// The inside of `[[...]]`, or `None` when it is not a code reference. A
+    /// path needs a `/` or a `.`, so `[[12]]` and `[[area]]` are not one.
+    pub fn parse(inner: &str) -> Option<CodeRef> {
+        let (target, label) = match inner.split_once('|') {
+            Some((target, label)) => (target.trim(), Some(label.trim().to_string())),
+            None => (inner.trim(), None),
+        };
+        let (target, rev) = match target.rsplit_once('@') {
+            Some((target, rev))
+                if !rev.is_empty()
+                    && rev
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c)) =>
+            {
+                (target, Some(rev.to_string()))
+            }
+            _ => (target, None),
+        };
+        let (path, symbol, lines) = if let Some((path, symbol)) = target.split_once('#') {
+            (
+                path,
+                Some(symbol.trim().to_string()).filter(|s| !s.is_empty()),
+                None,
+            )
+        } else if let Some((path, range)) = target.rsplit_once(':')
+            && let Some(lines) = parse_lines(range)
+        {
+            (path, None, Some(lines))
+        } else {
+            (target, None, None)
+        };
+        let path = path.trim().trim_start_matches("./");
+        let looks_like_a_path = (path.contains('/') || path.contains('.'))
+            && !path.contains(char::is_whitespace)
+            && !path.contains("://")
+            && !path.starts_with('/');
+        looks_like_a_path.then(|| CodeRef {
+            path: path.to_string(),
+            lines,
+            symbol,
+            rev,
+            label,
+            embed: false,
+        })
+    }
+
+    /// What identifies the code - path, place and revision, not label or
+    /// embedding - so the same code referred to twice resolves once.
+    pub fn key(&self) -> String {
+        let mut key = self.path.clone();
+        if let Some(symbol) = &self.symbol {
+            key.push('#');
+            key.push_str(symbol);
+        } else if let Some((start, end)) = self.lines {
+            key.push_str(&if start == end {
+                format!(":{start}")
+            } else {
+                format!(":{start}-{end}")
+            });
+        }
+        if let Some(rev) = &self.rev {
+            key.push('@');
+            key.push_str(rev);
+        }
+        key
+    }
+}
+
+fn parse_lines(range: &str) -> Option<(u32, u32)> {
+    let (start, end) = match range.split_once('-') {
+        Some((start, end)) => (start.trim().parse().ok()?, end.trim().parse().ok()?),
+        None => {
+            let line = range.trim().parse().ok()?;
+            (line, line)
+        }
+    };
+    (start >= 1 && end >= start).then_some((start, end))
 }
 
 /// Walk a body, handing back its text and its references in order.
@@ -593,11 +1035,44 @@ fn scan<'a>(body: &'a str, mut hand: impl FnMut(Found<'a>)) {
                 hand(Found::Text(&line[emitted..at]));
                 hand(Found::Reference(whole, Reference { number, label }));
                 emitted = at + close + 2;
+            } else if let Some(mut code) = CodeRef::parse(inner) {
+                // `![[...]]` embeds: the `!` belongs to the reference.
+                let bang = at > emitted && line[..at].ends_with('!');
+                let start = if bang { at - 1 } else { at };
+                code.embed = bang;
+                hand(Found::Text(&line[emitted..start]));
+                hand(Found::Code(&line[start..at + close + 2], code));
+                emitted = at + close + 2;
             }
             at += close + 2;
         }
         hand(Found::Text(&line[emitted..]));
     }
+}
+
+/// Rewrite every code reference in a body, skipping code blocks: `with` gets
+/// the reference and returns what replaces it, or `None` to leave it as written.
+pub fn rewrite_code_references(body: &str, with: &dyn Fn(&CodeRef) -> Option<String>) -> String {
+    let mut out = String::with_capacity(body.len());
+    scan(body, |found| match found {
+        Found::Text(text) | Found::Reference(text, _) => out.push_str(text),
+        Found::Code(whole, code) => match with(&code) {
+            Some(replacement) => out.push_str(&replacement),
+            None => out.push_str(whole),
+        },
+    });
+    out
+}
+
+/// Every code reference in a body, in order, skipping code blocks.
+pub fn code_references(body: &str) -> Vec<CodeRef> {
+    let mut found = Vec::new();
+    scan(body, |item| {
+        if let Found::Code(_, code) = item {
+            found.push(code);
+        }
+    });
+    found
 }
 
 /// Every `[[12]]` in a body, in order, skipping code.

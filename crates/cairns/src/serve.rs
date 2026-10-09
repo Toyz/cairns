@@ -100,7 +100,7 @@ pub fn serve(
 
 fn build(root: &Path, config: &Config) -> Result<Rendered, Box<dyn std::error::Error>> {
     let built: Log = crate::build_log(root, config, None)?;
-    Ok(cairns_site::render(&built)?)
+    crate::render_site(root, &built)
 }
 
 /// The newest modification time across everything the site is built from.

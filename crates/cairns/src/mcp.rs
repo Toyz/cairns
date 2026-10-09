@@ -190,8 +190,15 @@ fn tools(config: &Config, writable: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "worklog_list",
-            "description": "List every entry: number, title, date, areas and summary.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "description": "List entries: number, title, date, areas and summary. Every entry, or \
+                            those a query matches: `:area`, `has word`, open, closed, superseded, \
+                            clocked, documented; number, date, took compared with lt le gt ge eq ne; \
+                            and, or, not, [ ] to group. E.g. `:battle and open`, `took gt 2h`, \
+                            `date ge 2026-10-01 and not superseded`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+            },
         }),
         json!({
             "name": "worklog_read",
@@ -221,9 +228,29 @@ fn tools(config: &Config, writable: bool) -> Vec<Value> {
             "description": "Validate the log: numbering, front matter, filenames, index freshness.",
             "inputSchema": { "type": "object", "properties": {} },
         }),
+        json!({
+            "name": "worklog_clock",
+            "description": "Whether the worklog clock is running, since when, and for what.",
+            "inputSchema": { "type": "object", "properties": {} },
+        }),
     ];
 
     if writable {
+        tools.push(json!({
+            "name": "worklog_start",
+            "description": "Start the worklog clock. Call this when beginning any piece of work \
+                            that will end in an entry, before investigating anything: \
+                            worklog_new records how long the clock ran. Do not estimate the time \
+                            yourself. Replaces a running clock, unless `keep` is set.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "What the work is." },
+                    "keep": { "type": "boolean", "description": "Leave a running clock alone." },
+                    "cancel": { "type": "boolean", "description": "Stop the clock without recording anything: the work was abandoned." },
+                },
+            },
+        }));
         tools.push(json!({
             "name": "worklog_new",
             "description": "Write a new entry and refresh the index. Lead with the finding, \
@@ -245,10 +272,23 @@ fn tools(config: &Config, writable: bool) -> Vec<Value> {
                         "description": "Entries this one corrects. Set it whenever you overturn a claim.",
                     },
                     "resolves": {
-                        "type": "array", "items": { "type": "integer" },
-                        "description": "Entries whose open question this one answers. Not the same \
-                                        as superseding: answering a question does not make the entry \
-                                        that asked it wrong.",
+                        "type": "array", "items": { "type": ["integer", "string"] },
+                        "description": "Questions this one answers: an entry number (54) for its whole \
+                                        open question, or \"54.2\" for the second question of its list. \
+                                        Not the same as superseding: answering a question does not make \
+                                        the entry that asked it wrong.",
+                    },
+                    "carries": {
+                        "type": "array", "items": { "type": ["integer", "string"] },
+                        "description": "Questions this one takes over unanswered, in the same form - for an \
+                                        entry that gathers what is open into its own list. The entries that \
+                                        asked them point here instead of showing them answered.",
+                    },
+                    "took": {
+                        "type": "string",
+                        "description": "How long the work took - 1h 23m, 45m - only when the clock \
+                                        from worklog_start does not know: it was never started, or \
+                                        the work spanned a break.",
                     },
                 },
                 "required": ["title", "area", "body"],
@@ -268,8 +308,16 @@ fn call(
     match name {
         "worklog_list" => {
             let built = build(root, config)?;
+            let words: Vec<String> = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let query = cairns_core::query::parse(&words).map_err(invalid)?;
             let mut out = String::new();
-            for entry in &built.entries {
+            for entry in built.entries.iter().filter(|e| query.matches(&built, e)) {
                 out.push_str(&format!(
                     "{}. {} ({}, {})\n    {}\n",
                     entry.number,
@@ -371,6 +419,45 @@ fn call(
             }
         }
 
+        "worklog_clock" => match crate::clock::read(root).map_err(|e| internal(e.to_string()))? {
+            Some(clock) => Ok(format!(
+                "running {}, since {}{}",
+                cairns_core::entry::format_duration(clock.minutes()),
+                clock.started,
+                clock.title.map(|t| format!(" - {t}")).unwrap_or_default()
+            )),
+            None => Ok("no clock running".into()),
+        },
+
+        // Every clock call here is the quiet kind: stdout is the protocol, and
+        // a line printed into it would be a broken message.
+        "worklog_start" if writable => {
+            let flag = |key: &str| arguments.get(key).and_then(Value::as_bool).unwrap_or(false);
+            let running = crate::clock::read(root).map_err(|e| internal(e.to_string()))?;
+            if flag("cancel") {
+                crate::clock::stop(root).map_err(|e| internal(e.to_string()))?;
+                return Ok(if running.is_some() {
+                    "clock cleared"
+                } else {
+                    "no clock running"
+                }
+                .into());
+            }
+            if flag("keep") && running.is_some() {
+                return Ok("a clock is already running; left alone".into());
+            }
+            let title = arguments.get("title").and_then(Value::as_str);
+            crate::clock::start(root, title, true).map_err(|e| internal(e.to_string()))?;
+            Ok(match running {
+                Some(old) => format!(
+                    "clock started, replacing one that had run {}",
+                    cairns_core::entry::format_duration(old.minutes())
+                ),
+                None => "clock started - worklog_new records how long it ran".into(),
+            })
+        }
+        "worklog_start" => Err(invalid(READ_ONLY_NOTE)),
+
         "worklog_new" if writable => new_entry(root, config, arguments),
         "worklog_new" => Err(invalid(READ_ONLY_NOTE)),
 
@@ -453,6 +540,57 @@ fn new_entry(root: &Path, config: &Config, arguments: &Value) -> Result<String, 
     if !supersedes.is_empty() {
         front.push_str(&format!("supersedes: {}\n", supersedes.join(", ")));
     }
+    // The schema has always offered `resolves` and this never wrote it, so a
+    // question closed through MCP stayed open.
+    // An entry number or one question of it, given as a number or a string.
+    let questions = |key: &str| -> Result<Vec<String>, Failure> {
+        arguments
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        let text = match item {
+                            Value::Number(n) => n.to_string(),
+                            Value::String(s) => s.trim().to_string(),
+                            _ => String::new(),
+                        };
+                        text.parse::<cairns_core::entry::QuestionRef>()
+                            .map(|q| q.to_string())
+                            .map_err(|_| {
+                                invalid(format!("`{key}` has {item}: give 54 or \"54.2\""))
+                            })
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(|| Ok(Vec::new()))
+    };
+    for key in ["resolves", "carries"] {
+        let list = questions(key)?;
+        if !list.is_empty() {
+            front.push_str(&format!("{key}: {}\n", list.join(", ")));
+        }
+    }
+    // The clock, as `cairns new` reads it.
+    let clock = crate::clock::read(root).map_err(|e| internal(e.to_string()))?;
+    let took = match arguments
+        .get("took")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+    {
+        Some(given) => Some(cairns_core::entry::parse_duration(given).map_err(invalid)?),
+        None => clock.as_ref().map(crate::clock::Clock::minutes),
+    };
+    if let Some(clock) = &clock {
+        front.push_str(&format!("started: {}\n", clock.started));
+    }
+    if let Some(minutes) = took {
+        front.push_str(&format!(
+            "took: {}\n",
+            cairns_core::entry::format_duration(minutes)
+        ));
+    }
 
     // The tool has always closed an entry out when `still_unknown` is absent,
     // and its schema says so; only a trailer already in the body changes that,
@@ -476,7 +614,17 @@ fn new_entry(root: &Path, config: &Config, arguments: &Value) -> Result<String, 
     .map_err(|e| internal(e.to_string()))?;
 
     write_index(root, config).map_err(|e| internal(e.to_string()))?;
-    Ok(format!("wrote entry {number}: {}", path.display()))
+    if clock.is_some() {
+        crate::clock::stop(root).map_err(|e| internal(e.to_string()))?;
+    }
+    Ok(match took {
+        Some(minutes) => format!(
+            "wrote entry {number}: {} (took {})",
+            path.display(),
+            cairns_core::entry::format_duration(minutes)
+        ),
+        None => format!("wrote entry {number}: {}", path.display()),
+    })
 }
 
 fn resource(root: &Path, config: &Config, uri: &str) -> Result<(&'static str, String), Failure> {

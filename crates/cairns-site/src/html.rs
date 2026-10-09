@@ -50,6 +50,12 @@ fn prose(entry: &LogEntry) -> &str {
         Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
         None => text,
     };
+    // A closed trailer stays in the prose as written - "Still unknown:
+    // nothing.", and whatever note follows it. Only an open one is lifted out
+    // into its own box; cutting a closed one too threw its note away.
+    if entry.still_unknown.is_none() {
+        return text.trim();
+    }
     let cut = text
         .match_indices(cairns_core::entry::STILL_UNKNOWN)
         .map(|(at, _)| at)
@@ -67,7 +73,14 @@ fn prose(entry: &LogEntry) -> &str {
 /// sentence does not say it is one.
 pub fn plain_md(text: &str) -> String {
     use pulldown_cmark::Event;
-    let text = cairns_core::entry::rewrite_references(text, &|reference| {
+    // A code reference reads as what it names - `entry.rs#question_items`.
+    let text = cairns_core::entry::rewrite_code_references(text, &|code| {
+        Some(format!(
+            "`{}`",
+            code.label.clone().unwrap_or_else(|| code_label(code))
+        ))
+    });
+    let text = cairns_core::entry::rewrite_references(&text, &|reference| {
         Some(format!("cairns:{}", reference.number))
     });
     let mut out = String::new();
@@ -146,6 +159,22 @@ impl Links<'_> {
         // the same place from wherever they were written.
         let target = from_repo_root(self.from_dir, path);
 
+        // A file kept with an entry, in the folder named like it, is served
+        // beside the entry's page.
+        for entry in &self.log.entries {
+            let Some(stem) = entry.path.strip_suffix(".md") else {
+                continue;
+            };
+            if let Some(name) = target.strip_prefix(&format!("{stem}/"))
+                && entry.attachments.iter().any(|a| a == name)
+            {
+                return format!(
+                    "{}{fragment}",
+                    self.site(&format!("{}-{}/{name}", entry.number, entry.slug))
+                );
+            }
+        }
+
         if let Some(entry) = self.log.entries.iter().find(|entry| entry.path == target) {
             return format!(
                 "{}{fragment}",
@@ -221,10 +250,15 @@ pub struct Heading {
 /// several sections is unreadable without one - `pulldown-cmark` emits no ids
 /// of its own, so they are assigned here before the HTML is pushed.
 fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, String) {
+    // Code references first: each becomes a link to its lines, or for `![[`
+    // the code itself, from what the binary resolved into the log.
+    let text = cairns_core::entry::rewrite_code_references(text, &|code| {
+        Some(code_reference_html(links.log, code))
+    });
     // `[[12]]` becomes `[12](cairns:12)` before parsing, and `resolve` turns
     // that scheme into the entry's URL - so references and written-out links
     // take exactly the same path through the renderer.
-    let text = cairns_core::entry::rewrite_references(text, &|reference| {
+    let text = cairns_core::entry::rewrite_references(&text, &|reference| {
         links
             .log
             .entries
@@ -545,13 +579,29 @@ pub fn home(log: &Log) -> String {
     // navigation, they are the same on every visit, and stacking them over the
     // entries pushed the first one off the fold.
     let mut chips = String::from("<div class=\"filters\">\n<p class=\"rail-label\">Areas</p>\n");
+    // Where the time goes, beside how many entries each area has - once any
+    // entry records how long it took. An entry in two areas counts in both:
+    // the work was in both.
     for area in log.areas.iter().filter(|area| area.count > 0) {
+        let time = total_took(
+            log.entries
+                .iter()
+                .filter(|entry| entry.areas.contains(&area.name)),
+        );
         let _ = writeln!(
             chips,
             "<button class=\"chip\" data-area=\"{name}\" aria-pressed=\"false\" \
-             title=\"{about}\"><span>{name}</span><span class=\"count\">{count}</span></button>",
+             title=\"{about}{hover}\"><span>{name}</span><span class=\"count\">{shown}{count}</span></button>",
             name = escape(&area.name),
             about = escape(&area.about),
+            hover = time
+                .as_deref()
+                .map(|t| format!(" - {t} recorded"))
+                .unwrap_or_default(),
+            shown = time
+                .as_deref()
+                .map(|t| format!("<span class=\"area-time\">{t}</span>"))
+                .unwrap_or_default(),
             count = area.count
         );
     }
@@ -616,9 +666,12 @@ pub fn home(log: &Log) -> String {
         let _ = writeln!(
             body,
             "<section class=\"day\" id=\"d{date}\">\n<h2 class=\"day-label\"><time datetime=\"{date}\">{long}</time>\
-             <span class=\"day-count\">{count}</span></h2>\n<ul class=\"entries\">",
+             <span class=\"day-count\">{count}</span>{took}</h2>\n<ul class=\"entries\">",
             long = long_date(date),
-            count = day.len()
+            count = day.len(),
+            took = total_took(day.iter().copied())
+                .map(|t| format!("<span class=\"day-took\">{t}</span>"))
+                .unwrap_or_default()
         );
         for entry in day {
             let _ = writeln!(
@@ -641,9 +694,16 @@ pub fn home(log: &Log) -> String {
             }
             let _ = writeln!(
                 body,
-                "<span class=\"meta\"><span class=\"areas\">{areas}</span></span>\n\
+                "<span class=\"meta\"><span class=\"areas\">{areas}</span>{took}</span>\n\
                  </span>\n</a>\n</li>",
-                areas = escape(&entry.areas.join(" \u{00b7} "))
+                areas = escape(&entry.areas.join(" \u{00b7} ")),
+                took = entry
+                    .took_minutes
+                    .map(|m| format!(
+                        "<span class=\"took\">{}</span>",
+                        cairns_core::entry::format_duration(m)
+                    ))
+                    .unwrap_or_default()
             );
         }
         body.push_str("</ul>\n</section>\n");
@@ -695,6 +755,19 @@ fn glance(log: &Log) -> String {
          <div><dt>Open</dt><dd><a href=\"open/\">{open}</a></dd></div>",
         log.entries.len()
     );
+    if let Some(total) = total_took(log.entries.iter()) {
+        let clocked = log
+            .entries
+            .iter()
+            .filter(|e| e.took_minutes.is_some())
+            .count();
+        let _ = writeln!(
+            out,
+            "<div class=\"wide\" title=\"{clocked} of {} entries record how long they took\">\
+             <dt>Time</dt><dd>{total}</dd></div>",
+            log.entries.len()
+        );
+    }
     out.push_str("</dl>\n");
 
     // One bar per day across the whole span, empty days included - a gap is
@@ -762,6 +835,13 @@ fn glance(log: &Log) -> String {
     out
 }
 
+/// The time a run of entries took, summed, or `None` if none of them say.
+/// Entries that do not say are not counted as zero - they are not counted.
+fn total_took<'a>(entries: impl Iterator<Item = &'a LogEntry>) -> Option<String> {
+    let minutes: Vec<u32> = entries.filter_map(|entry| entry.took_minutes).collect();
+    (!minutes.is_empty()).then(|| cairns_core::entry::format_duration(minutes.iter().sum()))
+}
+
 /// Days since an arbitrary epoch, for spacing dates apart. Howard Hinnant's
 /// `days_from_civil`, the inverse of what `Date` already carries.
 fn day_number(date: cairns_core::Date) -> i64 {
@@ -785,6 +865,102 @@ fn short_date(date: cairns_core::Date) -> String {
         }
         _ => long,
     }
+}
+
+/// How a code reference reads when it gives no words of its own: the file's
+/// name and what in it - `entry.rs#question_items`, `entry.rs:120-158` - or
+/// the whole path for a whole file. The full path is on hover.
+fn code_label(code: &cairns_core::entry::CodeRef) -> String {
+    let name = code.path.rsplit('/').next().unwrap_or(&code.path);
+    if let Some(symbol) = &code.symbol {
+        format!("{name}#{symbol}")
+    } else if let Some((start, end)) = code.lines {
+        if start == end {
+            format!("{name}:{start}")
+        } else {
+            format!("{name}:{start}-{end}")
+        }
+    } else {
+        code.path.clone()
+    }
+}
+
+/// The repository URL for resolved code, at its lines, when the project names
+/// a repository. GitHub's form - `blob/<rev>/<path>#L12-L40` - which GitLab
+/// and Gitea also read.
+fn code_url(log: &Log, code: &cairns_core::log::ResolvedCode) -> Option<String> {
+    let repo = log.project.repository.as_deref()?.trim_end_matches('/');
+    let mut url = format!(
+        "{repo}/blob/{}/{}",
+        code.rev.as_deref().unwrap_or("HEAD"),
+        code.path
+    );
+    if let Some((start, end)) = code.lines {
+        url.push_str(&if start == end {
+            format!("#L{start}")
+        } else {
+            format!("#L{start}-L{end}")
+        });
+    }
+    Some(url)
+}
+
+/// A code reference as HTML: a link to its lines, or - `![[...]]` - the code
+/// itself, highlighted, under a caption linking to where it lives. One that
+/// could not be found says why, rather than linking somewhere that is not.
+fn code_reference_html(log: &Log, code: &cairns_core::entry::CodeRef) -> String {
+    let label = code.label.clone().unwrap_or_else(|| code_label(code));
+    let Some(resolved) = log.code.get(&code.key()) else {
+        // Not resolved at all - a log.json from before code references, or a
+        // renderer handed only part of a log. Shown as written.
+        return format!("<code class=\"code-ref\">{}</code>", escape(&label));
+    };
+    if let Some(why) = &resolved.missing {
+        return format!(
+            "<code class=\"code-ref code-ref--missing\" title=\"{} - {}\">{}</code>",
+            escape(&code.key()),
+            escape(why),
+            escape(&label)
+        );
+    }
+    let url = code_url(log, resolved);
+    let anchor = |inner: String| match &url {
+        Some(url) => format!(
+            "<a class=\"code-ref\" href=\"{}\" title=\"{}\">{inner}</a>",
+            escape(url),
+            escape(&code.key())
+        ),
+        None => inner,
+    };
+    if !code.embed {
+        return anchor(format!("<code>{}</code>", escape(&label)));
+    }
+    let Some(text) = &resolved.text else {
+        return anchor(format!("<code>{}</code>", escape(&label)));
+    };
+    let place = match resolved.lines {
+        Some((start, end)) if start == end => format!("line {start}"),
+        Some((start, end)) => format!("lines {start}\u{2013}{end}"),
+        None => String::new(),
+    };
+    // An HTML block, which markdown ends at a blank line: blank lines in the
+    // code are given something to hold them open.
+    let highlighted = crate::highlight::file(text, &resolved.path)
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                "<span></span>"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "\n<figure class=\"code-embed\"><figcaption>{}<span>{}</span></figcaption>\n{highlighted}\n</figure>\n",
+        anchor(format!("<code>{}</code>", escape(&code.path))),
+        escape(&place)
+    )
 }
 
 /// More files than this and the list folds away behind its count.
@@ -822,10 +998,17 @@ fn files_html(files: &[String], links: &Links<'_>) -> String {
             let _ = write!(list, "<span class=\"files-dir\">{}</span>", escape(dir));
         }
         for (name, file) in names {
+            // A file named with its lines or a definition links to them.
+            let href = cairns_core::entry::CodeRef::parse(file)
+                .filter(|code| code.lines.is_some() || code.symbol.is_some())
+                .and_then(|code| links.log.code.get(&code.key()))
+                .filter(|resolved| resolved.missing.is_none())
+                .and_then(|resolved| code_url(links.log, resolved))
+                .unwrap_or_else(|| links.resolve(&format!("../{file}")));
             let _ = write!(
                 list,
                 "<a href=\"{}\" title=\"{}\"><code>{}</code></a>",
-                escape(&links.resolve(&format!("../{file}"))),
+                escape(&href),
                 escape(file),
                 escape(name)
             );
@@ -870,6 +1053,85 @@ fn long_date(date: cairns_core::Date) -> String {
     }
 }
 
+/// Where the repository's own files mention this entry - "worklog 50" in a
+/// comment - shown the way its files are, each linking to the line.
+fn mentions_html(log: &Log, number: u32) -> String {
+    let Some(found) = log.mentions.get(&number).filter(|found| !found.is_empty()) else {
+        return String::new();
+    };
+    let mut list = String::new();
+    for mention in found {
+        let resolved = cairns_core::log::ResolvedCode {
+            path: mention.path.clone(),
+            lines: Some((mention.line, mention.line)),
+            ..Default::default()
+        };
+        let label = format!("{}:{}", mention.path, mention.line);
+        let _ = write!(
+            list,
+            "<span class=\"files-group\">{}</span>",
+            match code_url(log, &resolved) {
+                Some(url) => format!(
+                    "<a href=\"{}\" title=\"{}\"><code>{}</code></a>",
+                    escape(&url),
+                    escape(&mention.text),
+                    escape(&label)
+                ),
+                None => format!(
+                    "<code title=\"{}\">{}</code>",
+                    escape(&mention.text),
+                    escape(&label)
+                ),
+            }
+        );
+    }
+    let count = found.len();
+    if count <= FILES_SHOWN {
+        return format!(
+            "<p class=\"files mentions\"><span class=\"files-label\">Mentioned in</span>{list}</p>\n"
+        );
+    }
+    format!(
+        "<details class=\"files mentions\"><summary><span class=\"files-label\">Mentioned in</span>\
+         <span class=\"files-count\">{count} places</span></summary>\
+         <div class=\"files-list\">{list}</div></details>\n"
+    )
+}
+
+/// What a reference page covers, shown the way an entry shows its files: a
+/// line of items when there are a few, folded behind a count when there are
+/// many, one group to a line. piney_apples' pages cover up to a hundred
+/// addresses, and those wrote a table of their own to say so; this is that
+/// table's column, given a place on the page it describes.
+fn covers_html(groups: &[Vec<String>]) -> String {
+    let count: usize = groups.iter().map(Vec::len).sum();
+    if count == 0 {
+        return String::new();
+    }
+    let mut list = String::new();
+    for group in groups {
+        list.push_str("<span class=\"files-group\">");
+        for item in group {
+            let _ = write!(list, "<code>{}</code>", escape(item));
+        }
+        list.push_str("</span>");
+    }
+    if count <= FILES_SHOWN {
+        return format!(
+            "<p class=\"files covers\"><span class=\"files-label\">Covers</span>{list}</p>\n"
+        );
+    }
+    let groups_note = match groups.len() {
+        1 => String::new(),
+        n => format!(" in {n} groups"),
+    };
+    format!(
+        "<details class=\"files covers\"><summary><span class=\"files-label\">Covers</span>\
+         <span class=\"files-count\">{count}{groups_note}</span></summary>\
+         <div class=\"files-list\">{list}</div></details>\n"
+    )
+}
+
 /// One entry, with its corrections, its open question, and its neighbours.
 pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> String {
     let this = &log.entries[at];
@@ -882,6 +1144,20 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
         "<p class=\"dateline\"><time datetime=\"{date}\">{date}</time>",
         date = this.date
     );
+    // How long it took, beside when: quiet, because it is a fact about the
+    // work and not what the entry is about.
+    if let Some(minutes) = this.took_minutes {
+        let _ = write!(
+            body,
+            "<span class=\"took\"{title}>{}</span>",
+            cairns_core::entry::format_duration(minutes),
+            title = this
+                .started
+                .as_deref()
+                .map(|started| format!(" title=\"started {}\"", escape(started)))
+                .unwrap_or_default()
+        );
+    }
     // On an entry page these were decoration. They are the same filter the
     // index has, so they link to it with the filter already applied.
     for area in &this.areas {
@@ -906,7 +1182,11 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     if !this.superseded_by.is_empty()
         || !this.supersedes.is_empty()
         || !this.resolves.is_empty()
+        || !this.resolves_questions.is_empty()
+        || !this.carries.is_empty()
+        || !this.carries_questions.is_empty()
         || !this.documented_by.is_empty()
+        || !this.referenced_by.is_empty()
     {
         body.push_str("<div class=\"notice\">\n");
         if !this.superseded_by.is_empty() {
@@ -948,12 +1228,48 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
                     .join(", ")
             );
         }
-        if !this.resolves.is_empty() {
-            let who: Vec<String> = this.resolves.iter().map(|n| link(*n)).collect();
+        // A single question is named the way it is written - `54.2` - and
+        // links to the entry that asked it.
+        let one = |question: &str| -> String {
+            let (entry, item) = question.split_once('.').unwrap_or((question, ""));
+            match entry.parse::<u32>().ok().and_then(|n| by_number.get(&n)) {
+                Some(other) => format!(
+                    "question {item} of <a href=\"../{}/\">{}</a>",
+                    escape(&path_of(other)),
+                    escape(&other.title)
+                ),
+                None => format!("question {}", escape(question)),
+            }
+        };
+        let mut answers: Vec<String> = this.resolves.iter().map(|n| link(*n)).collect();
+        answers.extend(this.resolves_questions.iter().map(|q| one(q)));
+        if !answers.is_empty() {
             let _ = writeln!(
                 body,
-                "<p>This entry answers the question left open by {}.</p>",
-                who.join(", ")
+                "<p>This entry answers what was left open by {}.</p>",
+                answers.join(", ")
+            );
+        }
+        // The way back along `[[N]]` links, which were only ever written
+        // forwards: what built on this entry later.
+        if !this.referenced_by.is_empty() {
+            let _ = writeln!(
+                body,
+                "<p>Linked from {}.</p>",
+                this.referenced_by
+                    .iter()
+                    .map(|n| link(*n))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let mut takes: Vec<String> = this.carries.iter().map(|n| link(*n)).collect();
+        takes.extend(this.carries_questions.iter().map(|q| one(q)));
+        if !takes.is_empty() {
+            let _ = writeln!(
+                body,
+                "<p>This entry takes over the open questions of {}, unanswered.</p>",
+                takes.join(", ")
             );
         }
         body.push_str("</div>\n");
@@ -969,42 +1285,107 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
     // `files` has been parsed, validated and exported since the first version
     // and shown nowhere. It is the entry's link to the code it is about.
     body.push_str(&files_html(&this.files, &links));
+    body.push_str(&mentions_html(log, this.number));
 
     let (headings, prose_html) = markdown_with_headings(prose(this), &links);
     body.push_str(&prose_html);
 
     // The trailer, with its references linked like the prose's. A question a
     // later entry closed stays where it was asked, struck through, naming what
-    // closed it - the stylesheet had the rules for that from the start and the
-    // page never used them, so a closed question looked exactly like an open
-    // one on the entry that asked it.
+    // closed it; one carried into a later entry stays too, not struck - it was
+    // not answered - pointing where it went. A list is numbered, because those
+    // numbers are how a later entry names one of its questions.
     if let Some(unknown) = &this.still_unknown {
-        let (_, text) = markdown_with_headings(unknown, &links);
-        if this.resolved_by.is_empty() {
+        let entries_named = |numbers: &[u32], long: bool| -> String {
+            numbers
+                .iter()
+                .map(|number| match by_number.get(number) {
+                    Some(other) if long => format!(
+                        "<a href=\"../{}/\">No. {number} \u{2014} {}</a>",
+                        escape(&path_of(other)),
+                        escape(&other.title)
+                    ),
+                    Some(other) => format!(
+                        "<a href=\"../{}/\" title=\"{}\">#{number}</a>",
+                        escape(&path_of(other)),
+                        escape(&other.title)
+                    ),
+                    None => format!("#{number}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if !this.resolved_by.is_empty() {
+            let (_, text) = markdown_with_headings(unknown, &links);
+            let _ = writeln!(
+                body,
+                "<div class=\"unknown unknown--answered\"><strong>Was unknown</strong>\
+                 <div class=\"unknown-text\">{text}</div>\
+                 <p class=\"answered\">Closed by {}.</p></div>",
+                entries_named(&this.resolved_by, true)
+            );
+        } else if !this.carried_to.is_empty() {
+            let (_, text) = markdown_with_headings(unknown, &links);
+            let _ = writeln!(
+                body,
+                "<div class=\"unknown unknown--carried\"><strong>Still unknown</strong>\
+                 <div class=\"unknown-text\">{text}</div>\
+                 <p class=\"answered\">Carried to {}, and open there.</p></div>",
+                entries_named(&this.carried_to, true)
+            );
+        } else if this.questions.is_empty() {
+            let (_, text) = markdown_with_headings(unknown, &links);
             let _ = writeln!(
                 body,
                 "<div class=\"unknown\"><strong>Still unknown</strong>\
                  <div class=\"unknown-text\">{text}</div></div>"
             );
         } else {
-            let closers: Vec<String> = this
-                .resolved_by
-                .iter()
-                .map(|number| match by_number.get(number) {
-                    Some(other) => format!(
-                        "<a href=\"../{}/\">No. {number} \u{2014} {}</a>",
-                        escape(&path_of(other)),
-                        escape(&other.title)
-                    ),
-                    None => format!("No. {number}"),
-                })
-                .collect();
+            let (preamble, _) = cairns_core::entry::question_items(unknown);
+            let mut list = String::new();
+            for question in &this.questions {
+                let text = question_inline(&question.text, &links);
+                let (class, note) = if !question.resolved_by.is_empty() {
+                    (
+                        " class=\"closed\"",
+                        format!(
+                            "<span class=\"q-note\">closed by {}</span>",
+                            entries_named(&question.resolved_by, false)
+                        ),
+                    )
+                } else if !question.carried_to.is_empty() {
+                    (
+                        " class=\"carried\"",
+                        format!(
+                            "<span class=\"q-note\">carried to {}</span>",
+                            entries_named(&question.carried_to, false)
+                        ),
+                    )
+                } else {
+                    ("", String::new())
+                };
+                let _ = write!(
+                    list,
+                    "<li value=\"{}\"{class}><div class=\"q-text\">{text}</div>{note}</li>",
+                    question.number
+                );
+            }
+            let open = this.questions.iter().filter(|q| q.is_open()).count();
             let _ = writeln!(
                 body,
-                "<div class=\"unknown unknown--answered\"><strong>Was unknown</strong>\
-                 <div class=\"unknown-text\">{text}</div>\
-                 <p class=\"answered\">Closed by {}.</p></div>",
-                closers.join(", ")
+                "<div class=\"unknown{}\"><strong>{}</strong>\
+                 <div class=\"unknown-text\">{}<ol class=\"numbered\">{list}</ol></div></div>",
+                if open == 0 { " unknown--answered" } else { "" },
+                if open == 0 {
+                    "Was unknown"
+                } else {
+                    "Still unknown"
+                },
+                if preamble.is_empty() {
+                    String::new()
+                } else {
+                    markdown_with_headings(&preamble, &links).1
+                }
             );
         }
     }
@@ -1141,31 +1522,59 @@ pub fn open_questions(log: &Log) -> String {
     let asked: usize = log
         .open_questions
         .iter()
-        .map(|q| question_count(&q.text))
+        .map(|q| match q.items.len() {
+            0 => question_count(&q.text),
+            n => n,
+        })
         .sum();
+    // Closed: answered, carried elsewhere, or every question of its list one
+    // or the other. A carried question is still open - where it went - but it
+    // is not open *here*, and "is this still open?" is asked of this page.
     let closed: Vec<&LogEntry> = log
         .entries
         .iter()
-        .filter(|entry| entry.still_unknown.is_some() && !entry.resolved_by.is_empty())
+        .filter(|entry| {
+            entry.still_unknown.is_some()
+                && (!entry.resolved_by.is_empty()
+                    || !entry.carried_to.is_empty()
+                    || (!entry.questions.is_empty()
+                        && entry.questions.iter().all(|q| !q.is_open())))
+        })
         .collect();
 
+    // The reference's own unknowns, from each page's `## Unknown` section: the
+    // other half of what the project does not know, which this page used to
+    // leave out entirely.
+    let doc_unknowns: Vec<(&DocPage, String)> = log
+        .docs
+        .iter()
+        .filter(|doc| !doc.is_index)
+        .filter_map(|doc| cairns_core::doc::unknown_section(&doc.body).map(|text| (doc, text)))
+        .collect();
+    let asked = asked
+        + doc_unknowns
+            .iter()
+            .map(|(_, text)| question_count(text))
+            .sum::<usize>();
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let mut body = String::from("<article class=\"open-page\">\n<h1>Open questions</h1>\n");
     let _ = writeln!(
         body,
-        "<p class=\"lead\">{asked} {questions} across {asking} {entries}, quoted as each \
-         entry left it. A later entry closes one with <code>resolves:</code>.</p>",
-        questions = if asked == 1 { "question" } else { "questions" },
-        asking = log.open_questions.len(),
-        entries = if log.open_questions.len() == 1 {
-            "entry"
-        } else {
-            "entries"
+        "<p class=\"lead\">{} across {}{}, quoted as each left it. A later entry closes one \
+         with <code>resolves:</code>, or takes it over with <code>carries:</code>.</p>",
+        plural(asked, "question", "questions"),
+        plural(log.open_questions.len(), "entry", "entries"),
+        match doc_unknowns.len() {
+            0 => String::new(),
+            n => format!(" and {}", plural(n, "reference page", "reference pages")),
         },
     );
+    let anything_open = !log.open_questions.is_empty() || !doc_unknowns.is_empty();
 
     // The same toolbar as the index, minus density: search runs over the
     // questions on this page, not the entries' full text.
-    if !log.open_questions.is_empty() {
+    if anything_open {
         body.push_str(
             "<div class=\"toolbar\">\n<div class=\"search\">\n\
              <svg viewBox=\"0 0 16 16\" aria-hidden=\"true\" focusable=\"false\">\
@@ -1184,13 +1593,13 @@ pub fn open_questions(log: &Log) -> String {
              <button data-state=\"open\" aria-pressed=\"true\">Open <span class=\"count\">{}</span></button>\n\
              <button data-state=\"closed\" aria-pressed=\"false\">Closed <span class=\"count\">{}</span></button>\n\
              </div>\n</div>\n<p id=\"status\"></p>",
-            log.open_questions.len(),
+            log.open_questions.len() + doc_unknowns.len(),
             closed.len()
         );
     }
 
     let mut chips = String::new();
-    if log.open_questions.is_empty() {
+    if !anything_open {
         body.push_str("<p class=\"empty\">Nothing open.</p>\n");
     } else {
         // Areas with something open, counted by entry, in the project's order.
@@ -1223,45 +1632,84 @@ pub fn open_questions(log: &Log) -> String {
         body.push_str("<ul class=\"questions\" id=\"entries\" data-local>\n");
         // Every entry that asked something, open or closed, newest first; the
         // switch decides which are shown.
-        let mut rows: Vec<(u32, &str, &[u32])> = log
+        struct Row<'a> {
+            number: u32,
+            text: &'a str,
+            items: &'a [cairns_core::log::Question],
+            closed_by: Vec<u32>,
+            carried_to: Vec<u32>,
+        }
+        let mut rows: Vec<Row> = log
             .open_questions
             .iter()
-            .map(|q| (q.entry, q.text.as_str(), &[][..]))
-            .chain(closed.iter().filter_map(|entry| {
-                entry
-                    .still_unknown
-                    .as_deref()
-                    .map(|text| (entry.number, text, entry.resolved_by.as_slice()))
-            }))
+            .map(|q| Row {
+                number: q.entry,
+                text: &q.text,
+                items: &q.items,
+                closed_by: Vec::new(),
+                carried_to: Vec::new(),
+            })
             .collect();
-        rows.sort_by_key(|row| std::cmp::Reverse(row.0));
-        for (number, text, closed_by) in rows {
-            let count = question_count(text);
-            let state = if closed_by.is_empty() {
-                "open"
-            } else {
-                "closed"
+        for entry in &closed {
+            let Some(text) = entry.still_unknown.as_deref() else {
+                continue;
             };
-            let by = if closed_by.is_empty() {
-                String::new()
-            } else {
-                let who: Vec<String> = closed_by
-                    .iter()
-                    .map(|n| match by_number.get(n) {
-                        Some(other) => format!(
-                            "<a href=\"../{}/\" title=\"{}\">#{n}</a>",
-                            escape(&path_of(other)),
-                            escape(&other.title)
-                        ),
-                        None => format!("#{n}"),
-                    })
-                    .collect();
-                format!(
+            let mut closed_by = entry.resolved_by.clone();
+            let mut carried_to = entry.carried_to.clone();
+            for question in &entry.questions {
+                closed_by.extend(&question.resolved_by);
+                carried_to.extend(&question.carried_to);
+            }
+            closed_by.sort_unstable();
+            closed_by.dedup();
+            carried_to.sort_unstable();
+            carried_to.dedup();
+            rows.push(Row {
+                number: entry.number,
+                text,
+                items: &entry.questions,
+                closed_by,
+                carried_to,
+            });
+        }
+        rows.sort_by_key(|row| std::cmp::Reverse(row.number));
+        let named = |numbers: &[u32]| -> String {
+            numbers
+                .iter()
+                .map(|n| match by_number.get(n) {
+                    Some(other) => format!(
+                        "<a href=\"../{}/\" title=\"{}\">#{n}</a>",
+                        escape(&path_of(other)),
+                        escape(&other.title)
+                    ),
+                    None => format!("#{n}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        for row in rows {
+            let count = match row.items.len() {
+                0 => question_count(row.text),
+                n => n,
+            };
+            let closed_row = !row.closed_by.is_empty() || !row.carried_to.is_empty();
+            let state = if closed_row { "closed" } else { "open" };
+            let mut by = String::new();
+            if !row.closed_by.is_empty() {
+                let _ = write!(
+                    by,
                     "<span class=\"q-closed\">closed by {}</span>",
-                    who.join(", ")
-                )
-            };
-            match by_number.get(&number) {
+                    named(&row.closed_by)
+                );
+            }
+            if !row.carried_to.is_empty() {
+                let _ = write!(
+                    by,
+                    "<span class=\"q-closed\">carried to {}</span>",
+                    named(&row.carried_to)
+                );
+            }
+            match by_number.get(&row.number) {
                 Some(entry) => {
                     let _ = writeln!(
                         body,
@@ -1287,15 +1735,56 @@ pub fn open_questions(log: &Log) -> String {
                 None => {
                     let _ = writeln!(
                         body,
-                        "<li data-n=\"{number}\" data-state=\"{state}\">\n\
-                         <span class=\"q-no\">{number}</span>\n<div class=\"q-main\">"
+                        "<li data-n=\"{n}\" data-state=\"{state}\">\n\
+                         <span class=\"q-no\">{n}</span>\n<div class=\"q-main\">",
+                        n = row.number
                     );
                 }
             }
             let _ = writeln!(
                 body,
                 "<div class=\"question\">{}</div>\n</div>\n</li>",
-                question_html(text, &links)
+                match row.items.is_empty() {
+                    true => question_html(row.text, &links),
+                    false => numbered_questions_html(row.text, row.items, &links),
+                }
+            );
+        }
+        // Then the reference's, after the log's, each under its page.
+        let label = log.docs_label.as_deref().unwrap_or("Reference");
+        for (doc, text) in &doc_unknowns {
+            let links = Links {
+                log,
+                from_dir: doc_dir(doc),
+                rel: "../",
+                base: None,
+            };
+            let count = question_count(text);
+            let _ = writeln!(
+                body,
+                "<li data-n=\"doc:{slug}\" data-state=\"open\">\n\
+                 <span class=\"q-no q-doc\" aria-hidden=\"true\"></span>\n<div class=\"q-main\">\n\
+                 <a class=\"q-title\" href=\"../docs/{slug}/\">{title}</a>\n\
+                 <p class=\"q-meta\"><span>{label}{section}</span>{status}{many}</p>\n\
+                 <div class=\"question\">{text}</div>\n</div>\n</li>",
+                slug = escape(&doc.slug),
+                title = escape(&doc.title),
+                label = escape(label),
+                section = if doc.section.is_empty() {
+                    String::new()
+                } else {
+                    format!(" \u{00b7} {}", escape(&folder_name(&doc.section)))
+                },
+                status = doc
+                    .status
+                    .map(|s| format!("<span class=\"status status--{0}\">{0}</span>", s.name()))
+                    .unwrap_or_default(),
+                many = if count > 1 {
+                    format!("<span class=\"q-count\">{count} questions</span>")
+                } else {
+                    String::new()
+                },
+                text = question_html(text, &links)
             );
         }
         body.push_str("</ul>\n");
@@ -1324,6 +1813,72 @@ fn starts_item(line: &str) -> bool {
         || line.split_once(['.', ')']).is_some_and(|(n, rest)| {
             !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with(' ')
         })
+}
+
+/// One question as HTML: markdown, linked, and without the paragraph a lone
+/// line would be wrapped in, so a list of them stays a compact list.
+fn question_inline(text: &str, links: &Links<'_>) -> String {
+    let html = markdown_with_headings(text, links).1;
+    let trimmed = html.trim_end();
+    match trimmed
+        .strip_prefix("<p>")
+        .and_then(|rest| rest.strip_suffix("</p>"))
+    {
+        Some(inner) if !inner.contains("<p>") => inner.to_string(),
+        _ => html,
+    }
+}
+
+/// A list of questions by their numbers in the trailer - with gaps where
+/// others were answered - folded past five when there are more than seven, in
+/// the page as served.
+fn numbered_questions_html(
+    text: &str,
+    items: &[cairns_core::log::Question],
+    links: &Links<'_>,
+) -> String {
+    const SHOWN: usize = 5;
+    let (preamble, _) = cairns_core::entry::question_items(text);
+    let item = |question: &cairns_core::log::Question| {
+        let class = if !question.resolved_by.is_empty() {
+            " class=\"closed\""
+        } else if !question.carried_to.is_empty() {
+            " class=\"carried\""
+        } else {
+            ""
+        };
+        format!(
+            "<li value=\"{}\"{class}>{}</li>",
+            question.number,
+            question_inline(&question.text, links)
+        )
+    };
+    let mut out = String::new();
+    if !preamble.is_empty() {
+        out.push_str(&markdown_with_headings(&preamble, links).1);
+    }
+    let (shown, folded) = if items.len() > SHOWN + 2 {
+        items.split_at(SHOWN)
+    } else {
+        (items, &[][..])
+    };
+    out.push_str("<ol class=\"numbered\">");
+    for question in shown {
+        out.push_str(&item(question));
+    }
+    out.push_str("</ol>");
+    if !folded.is_empty() {
+        let _ = write!(
+            out,
+            "<details class=\"more\"><summary>Show {} more</summary><ol class=\"numbered\">",
+            folded.len()
+        );
+        for question in folded {
+            out.push_str(&item(question));
+        }
+        out.push_str("</ol></details>");
+    }
+    out
 }
 
 /// How many questions a trailer asks: the items of a list, or one.
@@ -1854,6 +2409,7 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         }
     }
     body.push_str("</p>\n");
+    body.push_str(&covers_html(&doc.covers));
 
     let from_dir = doc_dir(doc);
     let links = Links {

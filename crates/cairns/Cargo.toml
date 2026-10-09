@@ -18,6 +18,12 @@ path = "src/main.rs"
 [dependencies]
 cairns-core = { workspace = true }
 cairns-site = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 clap = { version = "4", features = ["derive"] }
 jiff = "0.2"
+# Git, read in-process: the tracked files and a file at a revision. No `git`
+# binary needed, and nothing to scrape from its output.
+gix = { version = "0.89", default-features = false, features = ["revision", "index", "sha1"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

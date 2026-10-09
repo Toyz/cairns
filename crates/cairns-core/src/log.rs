@@ -47,6 +47,43 @@ pub struct Log {
     /// one of them can go to its page instead.
     #[serde(default)]
     pub paths: SourcePaths,
+    /// Every code reference in the log and the reference, resolved against
+    /// the repository by whoever had it - lines found, code read for an
+    /// embed - keyed by `CodeRef::key`. Carried here, like the README, so the
+    /// renderer reads one thing and a renderer elsewhere needs no checkout.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub code: BTreeMap<String, ResolvedCode>,
+    /// Where the repository's own files mention an entry - "worklog 50" in a
+    /// comment - by entry number. Found by whoever has the repository.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mentions: BTreeMap<u32, Vec<CodeMention>>,
+}
+
+/// A line in the repository that mentions an entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeMention {
+    pub path: String,
+    pub line: u32,
+    /// The line itself, trimmed and cut short.
+    pub text: String,
+}
+
+/// A code reference, resolved.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResolvedCode {
+    pub path: String,
+    /// The lines it spans, 1-based and inclusive, when it names some.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    /// The code itself, for a reference that embeds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Why it could not be found, when it could not: the file is gone, the
+    /// name is not defined in it, the lines are past its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<String>,
 }
 
 /// The repository files that have a page of their own on the site. A doc
@@ -82,6 +119,9 @@ pub struct DocPage {
     /// The entries that established this page.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worklog: Vec<u32>,
+    /// What the page covers, as groups of items.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<Vec<String>>,
     pub body: String,
     pub content_hash: String,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -127,18 +167,52 @@ pub struct LogEntry {
     /// recorded once, on the only entry that could have known about it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub superseded_by: Vec<u32>,
-    /// Entries whose open question this one answers.
+    /// Entries whose whole open question this one answers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolves: Vec<u32>,
+    /// Single questions this one answers, as `54.2`: entry 54's second.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolves_questions: Vec<String>,
+    /// Entries whose whole open question this one takes over, unanswered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries: Vec<u32>,
+    /// Single questions this one takes over, as `54.2`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries_questions: Vec<String>,
     /// Derived: the entries that answered this one's open question. While this
     /// is non-empty the question is closed and is not in `open_questions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved_by: Vec<u32>,
+    /// Derived: the entries that took this one's question over. It is still
+    /// open - there, not here - so it is not in `open_questions` under this
+    /// entry, and it is not struck through as answered either.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_to: Vec<u32>,
+    /// Derived: a trailer written as a list, question by question, each with
+    /// what answered it or took it over. Empty for a trailer that is not a list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<Question>,
+    /// Files kept with the entry, in the folder named like it -
+    /// `worklog/0050-the-table/` beside `0050-the-table.md` - by name within
+    /// it. Listed by whoever has the files; the site copies them next to the
+    /// entry's page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+    /// Derived: later entries that link to this one with `[[N]]` - the way back
+    /// along a link that was only ever written forwards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub referenced_by: Vec<u32>,
     /// Derived: reference pages that name this entry as their evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documented_by: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_unknown: Option<String>,
+    /// When the work began, as the entry recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// How long it took, in minutes - wall-clock, see `docs/spec/entry.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took_minutes: Option<u32>,
     /// Markdown, not HTML. A newer renderer can re-render an old log, and a
     /// consumer wanting plain text is not unpicking someone else's markup.
     pub body: String,
@@ -147,10 +221,53 @@ pub struct LogEntry {
     pub extra: serde_json::Map<String, Value>,
 }
 
+/// One question of a trailer written as a list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Question {
+    /// Its place in the list, from 1 - what `resolves: 54.2` names.
+    pub number: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_by: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_to: Vec<u32>,
+}
+
+impl Question {
+    pub fn is_open(&self) -> bool {
+        self.resolved_by.is_empty() && self.carried_to.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenQuestion {
     pub entry: u32,
+    /// What is still open, as markdown: the trailer, or the part of its list
+    /// nothing has answered or taken over.
     pub text: String,
+    /// When the trailer is a list: the questions still open, by their number in
+    /// it, so they can be shown and named as `54.2` with gaps where others
+    /// closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Question>,
+}
+
+/// The references that name a whole entry, as its number.
+fn whole_refs(questions: &[crate::entry::QuestionRef]) -> Vec<u32> {
+    questions
+        .iter()
+        .filter(|q| q.item.is_none())
+        .map(|q| q.entry)
+        .collect()
+}
+
+/// The references that name one question, as `54.2`.
+fn item_refs(questions: &[crate::entry::QuestionRef]) -> Vec<String> {
+    questions
+        .iter()
+        .filter(|q| q.item.is_some())
+        .map(|q| q.to_string())
+        .collect()
 }
 
 impl Log {
@@ -171,7 +288,19 @@ impl Log {
         entries.sort_by_key(|entry| entry.front.number);
 
         let mut corrected: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        let mut answered: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        let mut linked: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for entry in &entries {
+            for reference in crate::entry::references(&entry.body) {
+                let from = linked.entry(reference.number).or_default();
+                if reference.number != entry.front.number && !from.contains(&entry.front.number) {
+                    from.push(entry.front.number);
+                }
+            }
+        }
+        // Keyed by question: `(54, None)` is the whole trailer, `(54, Some(2))`
+        // its second question.
+        let mut answered: BTreeMap<(u32, Option<u32>), Vec<u32>> = BTreeMap::new();
+        let mut carried: BTreeMap<(u32, Option<u32>), Vec<u32>> = BTreeMap::new();
         for entry in &entries {
             for older in &entry.front.supersedes {
                 corrected
@@ -179,8 +308,17 @@ impl Log {
                     .or_default()
                     .push(entry.front.number);
             }
-            for older in &entry.front.resolves {
-                answered.entry(*older).or_default().push(entry.front.number);
+            for question in &entry.front.resolves {
+                answered
+                    .entry((question.entry, question.item))
+                    .or_default()
+                    .push(entry.front.number);
+            }
+            for question in &entry.front.carries {
+                carried
+                    .entry((question.entry, question.item))
+                    .or_default()
+                    .push(entry.front.number);
             }
         }
 
@@ -210,6 +348,7 @@ impl Log {
                     is_index: doc.is_index(),
                     status: doc.status,
                     worklog: doc.worklog.clone(),
+                    covers: doc.covers.clone(),
                     body: doc.body.clone(),
                     content_hash: doc.content_hash.clone(),
                     extra: doc
@@ -228,18 +367,62 @@ impl Log {
             for area in &entry.front.areas {
                 *counts.entry(area.as_str()).or_default() += 1;
             }
+            let number = entry.front.number;
             let still_unknown = entry.still_unknown();
-            let resolved_by = answered
-                .get(&entry.front.number)
-                .cloned()
+            let whole = |map: &BTreeMap<(u32, Option<u32>), Vec<u32>>| {
+                map.get(&(number, None)).cloned().unwrap_or_default()
+            };
+            let resolved_by = whole(&answered);
+            let carried_to = whole(&carried);
+            let (preamble, items) = still_unknown
+                .as_deref()
+                .map(crate::entry::question_items)
                 .unwrap_or_default();
-            // A question a later entry answered is no longer open. It stays on
-            // the entry that asked it, pointing at the one that closed it.
-            if let (Some(text), true) = (&still_unknown, resolved_by.is_empty()) {
-                open_questions.push(OpenQuestion {
-                    entry: entry.front.number,
-                    text: text.clone(),
-                });
+            let questions: Vec<Question> = items
+                .into_iter()
+                .enumerate()
+                .map(|(at, text)| {
+                    let key = (number, Some(at as u32 + 1));
+                    Question {
+                        number: at as u32 + 1,
+                        text,
+                        resolved_by: answered.get(&key).cloned().unwrap_or_default(),
+                        carried_to: carried.get(&key).cloned().unwrap_or_default(),
+                    }
+                })
+                .collect();
+            // A question answered or taken over is no longer open here. It
+            // stays on the entry that asked it, pointing at what closed it or
+            // where it went. A list is open while any of its questions is.
+            if let Some(text) = &still_unknown
+                && resolved_by.is_empty()
+                && carried_to.is_empty()
+            {
+                let open: Vec<Question> =
+                    questions.iter().filter(|q| q.is_open()).cloned().collect();
+                if questions.is_empty() {
+                    open_questions.push(OpenQuestion {
+                        entry: number,
+                        text: text.clone(),
+                        items: Vec::new(),
+                    });
+                } else if !open.is_empty() {
+                    let text = if open.len() == questions.len() {
+                        text.clone()
+                    } else {
+                        let list: Vec<String> =
+                            open.iter().map(|q| format!("- {}", q.text)).collect();
+                        match preamble.is_empty() {
+                            true => list.join("\n"),
+                            false => format!("{preamble}\n{}", list.join("\n")),
+                        }
+                    };
+                    open_questions.push(OpenQuestion {
+                        entry: number,
+                        text,
+                        items: open,
+                    });
+                }
             }
 
             let slug = entry.slug();
@@ -259,10 +442,19 @@ impl Log {
                     .get(&entry.front.number)
                     .cloned()
                     .unwrap_or_default(),
-                resolves: entry.front.resolves.clone(),
+                resolves: whole_refs(&entry.front.resolves),
+                resolves_questions: item_refs(&entry.front.resolves),
+                carries: whole_refs(&entry.front.carries),
+                carries_questions: item_refs(&entry.front.carries),
                 resolved_by,
+                carried_to,
+                questions,
                 documented_by: cited.get(&entry.front.number).cloned().unwrap_or_default(),
+                referenced_by: linked.get(&entry.front.number).cloned().unwrap_or_default(),
+                attachments: Vec::new(),
                 still_unknown,
+                started: entry.front.started.clone(),
+                took_minutes: entry.front.took,
                 body: entry.body.clone(),
                 content_hash: entry.content_hash.clone(),
                 extra: entry
@@ -306,6 +498,8 @@ impl Log {
             links: config.links.clone(),
             colors: config.colors.clone(),
             stylesheet: None,
+            code: BTreeMap::new(),
+            mentions: BTreeMap::new(),
             paths: SourcePaths {
                 index: config.paths.index.clone(),
                 entries: config.paths.entries.trim_end_matches('/').to_string(),
@@ -347,9 +541,12 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
     for entry in entries {
         let number = entry.front.number;
         if let Some(first) = seen.insert(number, &entry.path) {
+            // Two branches each writing the next entry is the usual way here,
+            // and the fix has a command.
             problems.push(format!(
-                "{}: number {number} is already used by {first}",
-                entry.path
+                "{}: number {number} is already used by {first} - `cairns renumber {}` \
+                 moves this one to the next free number",
+                entry.path, entry.path
             ));
         }
 
@@ -407,25 +604,51 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
             }
         }
 
-        for older in &entry.front.resolves {
-            match entries.iter().find(|other| other.front.number == *older) {
-                None => problems.push(format!(
-                    "{}: resolves {older}, which does not exist",
-                    entry.path
-                )),
-                // Answering an entry that asked nothing is a sign the number is
-                // wrong, and it is the kind of mistake nothing else would show.
-                Some(other) if other.still_unknown().is_none() => problems.push(format!(
-                    "{}: resolves {older}, which left no open question",
-                    entry.path
-                )),
-                Some(_) => {}
-            }
-            if *older >= number {
-                problems.push(format!(
-                    "{}: resolves {older}, which is not an earlier entry",
-                    entry.path
-                ));
+        // `resolves` and `carries` both point at an earlier entry's open
+        // question, whole or one item of it, and are wrong in the same ways.
+        for (key, list) in [
+            ("resolves", &entry.front.resolves),
+            ("carries", &entry.front.carries),
+        ] {
+            for question in list {
+                let older = question.entry;
+                match entries.iter().find(|other| other.front.number == older) {
+                    None => problems.push(format!(
+                        "{}: {key} {question}, which does not exist",
+                        entry.path
+                    )),
+                    // Pointing at an entry that asked nothing is a sign the
+                    // number is wrong, and nothing else would show it.
+                    Some(other) => match other.still_unknown() {
+                        None => problems.push(format!(
+                            "{}: {key} {question}, which left no open question",
+                            entry.path
+                        )),
+                        Some(text) => {
+                            let count = crate::entry::question_items(&text).1.len();
+                            if let Some(item) = question.item
+                                && item as usize > count
+                            {
+                                problems.push(format!(
+                                    "{}: {key} {question}, but entry {older} {}",
+                                    entry.path,
+                                    match count {
+                                        0 => "asks one question, not a list - name it as {older}"
+                                            .replace("{older}", &older.to_string()),
+                                        1 => "lists 1 question".to_string(),
+                                        n => format!("lists {n} questions"),
+                                    }
+                                ));
+                            }
+                        }
+                    },
+                }
+                if older >= number {
+                    problems.push(format!(
+                        "{}: {key} {question}, which is not an earlier entry",
+                        entry.path
+                    ));
+                }
             }
         }
     }
@@ -486,6 +709,68 @@ mod tests {
         assert_eq!(built.entries[0].resolved_by, vec![2]);
         // It stays on the entry that asked it; only the open list drops it.
         assert!(built.entries[0].still_unknown.is_some());
+    }
+
+    #[test]
+    fn one_question_answered_leaves_the_rest_open() {
+        let asking = entry(
+            1,
+            "",
+            "Prose.\n\n**Still unknown:**\n- the first\n- the second\n- the third",
+        );
+        let answering = entry(2, "resolves: 1.2\n", "Prose.\n\n**Still unknown:** nothing");
+        let built = Log::build(&config(), vec![asking, answering], None);
+        let questions = &built.entries[0].questions;
+        assert_eq!(questions.len(), 3);
+        assert_eq!(questions[1].resolved_by, vec![2]);
+        assert!(built.entries[0].resolved_by.is_empty());
+        // Still open, minus the one answered, keeping the others' numbers.
+        let open = &built.open_questions[0];
+        assert_eq!(
+            open.items.iter().map(|q| q.number).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(open.text, "- the first\n- the third");
+        assert_eq!(built.entries[1].resolves_questions, vec!["1.2"]);
+    }
+
+    #[test]
+    fn a_carried_question_leaves_the_open_list_without_being_answered() {
+        let asking = entry(1, "", "Prose.\n\n**Still unknown:** whether it holds.");
+        let triage = entry(
+            2,
+            "carries: 1\n",
+            "Prose.\n\n**Still unknown:**\n- whether 1's thing holds",
+        );
+        let built = Log::build(&config(), vec![asking, triage], None);
+        assert_eq!(built.entries[0].carried_to, vec![2]);
+        assert!(
+            built.entries[0].resolved_by.is_empty(),
+            "carried is not answered"
+        );
+        // Open once, where it now lives.
+        assert_eq!(built.open_questions.len(), 1);
+        assert_eq!(built.open_questions[0].entry, 2);
+    }
+
+    #[test]
+    fn a_question_number_past_the_list_is_rejected() {
+        let asking = entry(1, "", "Prose.\n\n**Still unknown:**\n- one\n- two");
+        let past = entry(2, "resolves: 1.3\n", "Prose.\n\n**Still unknown:** nothing");
+        let found = problems(&config(), &[asking.clone(), past]);
+        assert!(
+            found.iter().any(|p| p.contains("lists 2 questions")),
+            "{found:?}"
+        );
+        let single = entry(1, "", "Prose.\n\n**Still unknown:** one thing.");
+        let itemised = entry(2, "carries: 1.1\n", "Prose.\n\n**Still unknown:** nothing");
+        let found = problems(&config(), &[single, itemised]);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("not a list - name it as 1")),
+            "{found:?}"
+        );
     }
 
     #[test]

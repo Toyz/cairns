@@ -361,11 +361,12 @@ mod tests {
             ),
         ]);
         let page = html::open_questions(&built);
+        // Numbered, because the numbers are how a later entry names one.
         assert!(
-            page.contains("<li>what <a href=\"../1-title-1/\""),
+            page.contains("<li value=\"1\">what <a href=\"../1-title-1/\""),
             "{page}"
         );
-        assert!(page.contains("<li>and more</li>"), "{page}");
+        assert!(page.contains("<li value=\"2\">and more</li>"), "{page}");
     }
 
     fn entry_page_with_files(files: &str) -> String {

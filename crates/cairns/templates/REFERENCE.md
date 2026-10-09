@@ -96,6 +96,11 @@ Both are worth fixing before they are trusted.
 - An unknown is named, in its own section, not left out. A page that omits what
   it does not know reads as more certain than it is.
 - Link entries with `[[12]]`, other pages with a relative link to their file.
+- Name code by definition, `[[src/thing.rs#parse_header]]`, rather than by
+  line; embed it with `![[...]]` where the page is about that code. `doc list`
+  flags a reference that no longer resolves - a page is meant to be current.
+- Put what the page does not know under `## Unknown`. The open questions page
+  collects it beside the log's.
 
 <!-- cairns:project -->
 

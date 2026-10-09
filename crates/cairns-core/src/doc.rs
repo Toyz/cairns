@@ -52,6 +52,9 @@ pub struct Doc {
     pub status: Option<Status>,
     /// The entries that established this page, by number.
     pub worklog: Vec<u32>,
+    /// What the page covers in the thing it documents - the files, addresses,
+    /// functions - as groups (`;`) of items (`,`).
+    pub covers: Vec<Vec<String>>,
     pub body: String,
     pub content_hash: String,
     pub extra: BTreeMap<String, String>,
@@ -83,11 +86,17 @@ impl Doc {
             .map_err(|problem| Error::entry(&raw.path, problem))?
             .unwrap_or_default();
 
+        let covers = fields
+            .remove("covers")
+            .map(|value| covered(&value))
+            .unwrap_or_default();
+
         Ok(Doc {
             path: raw.path.clone(),
             title,
             status,
             worklog,
+            covers,
             body: body.trim_start_matches('\n').to_string(),
             content_hash: {
                 let mut out = String::from("sha256:");
@@ -179,6 +188,59 @@ fn slug_of(path: &str) -> String {
 /// entries is naturally written `7 to 20`, and hellbender's port plan was
 /// written that way before this tool existed. Both `7 to 20` and `7-20` expand,
 /// inclusive.
+/// `covers:` as groups of items: `;` between groups, `,` between items, so
+/// `INF a.prg:0x10 f, 0x20 g; INF b.prg:0x30 h` is two groups - each usually
+/// one binary - of what the page accounts for.
+/// A page's `## Unknown` section - what it says it does not know - as markdown,
+/// or `None` when it has none or it says nothing is unknown.
+///
+/// Reference pages keep their open questions in a section of their own, the
+/// way entries keep them in a trailer; collected, they belong beside the log's.
+/// `Unknowns`, `Still unknown` and `Open questions` are taken as the same.
+pub fn unknown_section(body: &str) -> Option<String> {
+    let mut lines = body.lines();
+    lines.find(|line| {
+        let heading = line.trim();
+        let Some(name) = heading.strip_prefix("## ") else {
+            return false;
+        };
+        let name = name.trim().trim_end_matches(':').to_ascii_lowercase();
+        matches!(
+            name.as_str(),
+            "unknown" | "unknowns" | "still unknown" | "open questions"
+        )
+    })?;
+    let section: Vec<&str> = lines
+        .take_while(|line| !line.starts_with("## ") && !line.starts_with("# "))
+        .collect();
+    let text = section.join("\n").trim().to_string();
+    // As an entry's trailer: a first sentence of "None" or "Nothing" says
+    // nothing is open, whatever note follows - "None: every file is
+    // accounted for above." is not a question.
+    let first = text
+        .split(['.', ':', ';', '\n'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    let says_nothing = first.eq_ignore_ascii_case("nothing") || first.eq_ignore_ascii_case("none");
+    (!text.is_empty() && !says_nothing).then_some(text)
+}
+
+fn covered(value: &str) -> Vec<Vec<String>> {
+    value
+        .split(';')
+        .map(|group| {
+            group
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|group| !group.is_empty())
+        .collect()
+}
+
 fn cited(value: &str) -> std::result::Result<Vec<u32>, String> {
     let mut numbers = Vec::new();
     for part in value
@@ -212,6 +274,35 @@ fn cited(value: &str) -> std::result::Result<Vec<u32>, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_page_says_what_it_does_not_know_under_its_own_heading() {
+        let body = "# Page\n\nWhat is true.\n\n## Unknown\n\n- the second table\n- its last word\n\n## Checked\n\nAll of it.\n";
+        assert_eq!(
+            super::unknown_section(body).as_deref(),
+            Some("- the second table\n- its last word")
+        );
+        assert_eq!(super::unknown_section("## Unknowns\n\nNothing.\n"), None);
+        assert_eq!(
+            super::unknown_section("## Unknown\n\nNone: every file is accounted for above.\n"),
+            None
+        );
+        assert!(super::unknown_section("## Unknown\n\nNone of the offsets past 0x40.\n").is_some());
+        assert_eq!(super::unknown_section("## Unknown factors\n\nx\n"), None);
+        assert_eq!(super::unknown_section("No heading at all."), None);
+    }
+
+    #[test]
+    fn covers_is_groups_of_items() {
+        assert_eq!(
+            super::covered("INF a.prg:0x10 f, 0x20 g; INF b.prg:0x30 h ;; ,"),
+            vec![
+                vec!["INF a.prg:0x10 f".to_string(), "0x20 g".to_string()],
+                vec!["INF b.prg:0x30 h".to_string()],
+            ]
+        );
+    }
+
     use super::cited;
 
     #[test]

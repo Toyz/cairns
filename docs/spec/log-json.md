@@ -114,6 +114,22 @@ the file: `index` (`WORKLOG.md`), `entries` (`worklog`) and `readme`. A link
 in an entry or a reference page to one of them goes to that page - the entry
 list, or About - because the site has no such file to link to.
 
+**`took_minutes`** and **`started`** are an entry's time, when it recorded
+one - see "How long it took" in [entry.md](entry.md). **`covers`** on a doc
+page is its `covers:` as a list of groups, each a list of items.
+
+**`resolves` and `carries`** hold the whole entries a log entry answers or
+takes over, as numbers, as before; **`resolves_questions` and
+`carries_questions`** hold single questions as `"54.2"`. On the entry that
+asked, **`resolved_by`** and **`carried_to`** are derived for its whole
+trailer, and **`questions`** - when the trailer is a list - holds each
+question with its own `resolved_by` and `carried_to`. An open question's
+**`items`** are the questions of its list still open, by their numbers.
+
+**`code`** maps each code reference's key - `src/a.rs#name`, `src/a.rs:12-40`,
+with `@rev` when pinned - to where it was found (`path`, `lines`, `rev`), the
+code itself when it is embedded (`text`), or why it was not (`missing`).
+
 **`extra`** holds any front matter key the spec does not define, passed through
 untouched, so a project can carry its own metadata without forking the format
 and without the tool needing to know what it means.

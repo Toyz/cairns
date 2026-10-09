@@ -5,8 +5,12 @@
 //! everything else is designed against, so they are worth fixing early and
 //! being honest about what is not built yet.
 
+mod clock;
+mod code;
 mod doc;
+mod git;
 mod mcp;
+mod refs;
 mod serve;
 
 use cairns_core::config::TargetKind;
@@ -42,7 +46,12 @@ enum DocCommand {
         entries: Vec<u32>,
     },
     /// Every page with its status and evidence, and what needs looking at.
-    List,
+    List {
+        /// Fail if any page needs looking at - for CI, the way `check` guards
+        /// the log.
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -68,9 +77,14 @@ enum Command {
         /// Earlier entries this one corrects.
         #[arg(long, value_delimiter = ',')]
         supersedes: Vec<u32>,
-        /// Earlier entries whose open question this one answers.
+        /// Earlier questions this one answers: an entry (`54`) or one question
+        /// of its list (`54.2`).
         #[arg(long, value_delimiter = ',')]
-        resolves: Vec<u32>,
+        resolves: Vec<String>,
+        /// Earlier questions this one takes over unanswered - a triage entry
+        /// gathering what is open: `54` or `54.2`.
+        #[arg(long, value_delimiter = ',')]
+        carries: Vec<String>,
         /// The prose, as markdown, or `-` to read it from stdin. Without it the
         /// entry is a stub to fill in.
         #[arg(long)]
@@ -79,7 +93,32 @@ enum Command {
         /// `**Still unknown:**` line, unless the body already ends with one.
         #[arg(long)]
         unknown: Option<String>,
+        /// How long the work took - `1h 23m`, `45m` - in place of what the
+        /// clock from `cairns start` says.
+        #[arg(long)]
+        took: Option<String>,
+        /// Files to keep with the entry - a screenshot, a capture - copied into
+        /// its folder. Link them in the body by name: `![the hold](shot.png)`.
+        #[arg(long, value_delimiter = ',')]
+        attach: Vec<PathBuf>,
     },
+    /// Start the clock on a piece of work; `cairns new` records how long it ran.
+    Start {
+        /// What the work is, to be reminded of.
+        title: Option<String>,
+        /// Stop the running clock without recording anything.
+        #[arg(long)]
+        cancel: bool,
+        /// Leave a running clock alone rather than replace it - for a hook
+        /// that runs on every prompt.
+        #[arg(long)]
+        keep: bool,
+        /// Print nothing. A hook's output can land in the model's context.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// What the clock is doing.
+    Clock,
     /// The reference pages: write one, cite an entry on one, list them all.
     Doc {
         #[command(subcommand)]
@@ -127,7 +166,41 @@ enum Command {
         dry_run: bool,
     },
     /// Write cairns.toml and the worklog skill into this repo.
-    Init,
+    Init {
+        /// Also add a Claude Code hook that starts the clock when a prompt
+        /// arrives, so timing does not depend on a model remembering to.
+        #[arg(long)]
+        hooks: bool,
+    },
+    /// List the entries a query matches - all of them with none. `:area`,
+    /// `has word`, open, closed, superseded, clocked, documented; number, date
+    /// and took with lt le gt ge eq ne; and, or, not, `[ ]` to group (quote
+    /// the brackets in zsh).
+    Ls {
+        /// The query, as words: `:battle and open`, `took gt 2h`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        query: Vec<String>,
+    },
+    /// Where an entry is mentioned: other entries, reference pages, and the
+    /// repository's own files - "worklog 50" in a comment.
+    Refs {
+        /// The entry number.
+        number: u32,
+    },
+    /// Give an entry a new number - for two branches that each wrote the same
+    /// one. Fixes the entry; lists every other mention of the old number to
+    /// check by hand, since `[[34]]` elsewhere may mean either entry.
+    Renumber {
+        /// The entry: its path, or its number when only one entry has it.
+        entry: String,
+        /// The number to give it; the next free one if not given.
+        #[arg(long)]
+        to: Option<u32>,
+    },
+    /// Refresh what cairns generates in this repo - the skills, the clock hook
+    /// if there is one, the index - after upgrading cairns or editing
+    /// cairns.toml. Touches nothing else.
+    Update,
     /// Serve the worklog over MCP on stdin and stdout, for a host with no shell.
     Mcp {
         /// Allow writing entries. Reading is all that is offered otherwise.
@@ -148,6 +221,15 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // `cairns ls | head` closes the pipe early; a command-line tool should end
+    // quietly then, as Unix tools do, not panic. Rust ignores SIGPIPE by
+    // default and turns it into a failed print instead.
+    #[cfg(unix)]
+    // SAFETY: restoring the default disposition of a signal, at start-up,
+    // before any thread exists.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     match run() {
         Ok(code) => code,
         Err(problem) => {
@@ -223,7 +305,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
 
             for problem in &problems {
-                eprintln!("{problem}");
+                eprintln!("{}", located(&root, problem));
             }
             if !problems.is_empty() {
                 return Ok(ExitCode::FAILURE);
@@ -271,7 +353,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Build { out } => {
             let (root, config) = load()?;
             let built = build_log(&root, &config, stamp(false))?;
-            let rendered = cairns_site::render(&built)?;
+            let rendered = render_site(&root, &built)?;
             for file in &rendered.files {
                 let path = out.join(&file.path);
                 if let Some(parent) = path.parent() {
@@ -288,8 +370,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             files,
             supersedes,
             resolves,
+            carries,
             body,
             unknown,
+            took,
+            attach,
         } => {
             let (root, config) = load()?;
             // `--area "a, b"` and `--area a,b` are the same thing. The front
@@ -317,11 +402,36 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             // refused leaves nothing behind.
             let body = read_body(body)?;
             let prose = compose_body(body.as_deref(), unknown.as_deref())?;
+            // The clock is read before anything is written, and stopped only
+            // after the entry is, so a refused entry leaves it running.
+            let clock = clock::read(&root)?;
+            let took = match took.as_deref() {
+                Some(given) => Some(cairns_core::entry::parse_duration(given)?),
+                None => clock.as_ref().map(clock::Clock::minutes),
+            };
 
             let dir = root.join(&config.paths.entries);
             let number = next_number(&dir)?;
             let slug = cairns_core::entry::slugify(&title);
             let path = dir.join(format!("{number:04}-{slug}.md"));
+            // Attachments are checked before the number is used, and the
+            // body's links to them by bare name pointed into the folder they
+            // are about to be in - the number was not known when they were
+            // written.
+            let stem = format!("{number:04}-{slug}");
+            for file in &attach {
+                if !file.is_file() {
+                    return Err(format!("--attach {}: no such file", file.display()).into());
+                }
+            }
+            let mut prose = prose;
+            for file in &attach {
+                let name = file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                prose = prose.replace(&format!("]({name})"), &format!("]({stem}/{name})"));
+            }
             if path.exists() {
                 return Err(format!("{} already exists", path.display()).into());
             }
@@ -335,12 +445,39 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
             };
             let numbers = |values: &[u32]| values.iter().map(u32::to_string).collect::<Vec<_>>();
-            let links = format!(
+            // Checked here, so a mistyped `54.x` is refused before a number is
+            // taken rather than written into an entry that will not parse.
+            let questions = |values: &[String], flag: &str| -> Result<Vec<String>, String> {
+                values
+                    .iter()
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        value
+                            .parse::<cairns_core::entry::QuestionRef>()
+                            .map(|q| q.to_string())
+                            .map_err(|_| {
+                                format!("--{flag} {value:?}: give an entry (54) or one question of it (54.2)")
+                            })
+                    })
+                    .collect()
+            };
+            let mut links = format!(
                 "{}{}{}",
                 line("files", &files),
                 line("supersedes", &numbers(&supersedes)),
-                line("resolves", &numbers(&resolves)),
+                line("resolves", &questions(&resolves, "resolves")?),
             );
+            links.push_str(&line("carries", &questions(&carries, "carries")?));
+            if let Some(clock) = &clock {
+                links.push_str(&format!("started: {}\n", clock.started));
+            }
+            if let Some(minutes) = took {
+                links.push_str(&format!(
+                    "took: {}\n",
+                    cairns_core::entry::format_duration(minutes)
+                ));
+            }
             std::fs::write(
                 &path,
                 format!(
@@ -350,13 +487,156 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 ),
             )?;
 
+            if !attach.is_empty() {
+                let folder = dir.join(&stem);
+                std::fs::create_dir_all(&folder)?;
+                for file in &attach {
+                    let name = file.file_name().ok_or("an attachment needs a file name")?;
+                    std::fs::copy(file, folder.join(name))?;
+                }
+            }
             // The index is refreshed here so it is never stale between creating
             // an entry and remembering to regenerate it.
             write_index(&root, &config)?;
             println!("{}", path.display());
+            // A code reference that does not resolve is worth hearing about
+            // while the entry can still be fixed. Not refused: code moves, and
+            // a log is not wrong for having pointed at where it was.
+            for code in cairns_core::entry::code_references(&prose) {
+                if let Some(why) = code::resolve(&root, &code, false).missing {
+                    eprintln!("cairns: {} - {why}", code.key());
+                }
+            }
+            if let Some(minutes) = took {
+                let took = cairns_core::entry::format_duration(minutes);
+                match &clock {
+                    Some(clock) => {
+                        clock::stop(&root)?;
+                        println!("took {took}, by the clock started {}", clock.started);
+                        // Wall-clock includes every break. Past a working day
+                        // it almost certainly does, and the number should not
+                        // go into the log unremarked.
+                        if minutes > 8 * 60 {
+                            eprintln!(
+                                "cairns: that is longer than a working day - if it spans a break, \
+                                 correct `took:` in {}",
+                                path.display()
+                            );
+                        }
+                    }
+                    None => println!("took {took}"),
+                }
+            }
         }
 
-        Command::Init => {
+        Command::Ls { query } => {
+            let (root, config) = load()?;
+            let query = cairns_core::query::parse(&query)?;
+            let built = Log::build_with(
+                &config,
+                read_entries(&root, &config)?,
+                read_docs(&root, &config)?,
+                None,
+            );
+            let mut shown = 0;
+            for entry in built.entries.iter().filter(|e| query.matches(&built, e)) {
+                shown += 1;
+                println!(
+                    "{:>4}  {}  {}  [{}]{}",
+                    entry.number,
+                    entry.date,
+                    entry.title,
+                    entry.areas.join(", "),
+                    entry
+                        .took_minutes
+                        .map(|m| format!("  {}", cairns_core::entry::format_duration(m)))
+                        .unwrap_or_default()
+                );
+            }
+            eprintln!("{shown} of {} entries", built.entries.len());
+        }
+
+        Command::Refs { number } => {
+            let (root, config) = load()?;
+            let built = build_log(&root, &config, None)?;
+            let Some(entry) = built.entries.iter().find(|e| e.number == number) else {
+                return Err(format!("no entry {number}").into());
+            };
+            println!("{number}. {}", entry.title);
+            let mut any = false;
+            let mut say = |line: String| {
+                any = true;
+                println!("{line}");
+            };
+            for other in &entry.referenced_by {
+                if let Some(other) = built.entries.iter().find(|e| e.number == *other) {
+                    say(format!("{}:1: links to it with [[{number}]]", other.path));
+                }
+            }
+            for (key, list) in [
+                ("corrects", &entry.superseded_by),
+                ("answers", &entry.resolved_by),
+                ("carries", &entry.carried_to),
+            ] {
+                for other in list {
+                    if let Some(other) = built.entries.iter().find(|e| e.number == *other) {
+                        say(format!("{}:1: {key} it", other.path));
+                    }
+                }
+            }
+            for doc in built
+                .docs
+                .iter()
+                .filter(|doc| doc.worklog.contains(&number))
+            {
+                say(format!("{}:1: cites it as evidence", doc.path));
+            }
+            for mention in built.mentions.get(&number).into_iter().flatten() {
+                say(format!(
+                    "{}:{}: {}",
+                    mention.path, mention.line, mention.text
+                ));
+            }
+            if !any {
+                println!("nothing mentions it");
+            }
+        }
+
+        Command::Renumber { entry, to } => {
+            let (root, config) = load()?;
+            renumber(&root, &config, &entry, to)?;
+        }
+
+        Command::Update => {
+            let (root, config) = load()?;
+            write_skills(&root, &config)?;
+            refresh_clock_hook(&root)?;
+            let count = write_index(&root, &config)?;
+            println!("{count} entries -> {}", config.paths.index);
+        }
+
+        Command::Start {
+            title,
+            cancel,
+            keep,
+            quiet,
+        } => {
+            let (root, _) = load()?;
+            if cancel {
+                clock::cancel(&root)?;
+            } else if keep && clock::read(&root)?.is_some() {
+                // Already running: the work it times is not finished yet.
+            } else {
+                clock::start(&root, title.as_deref(), quiet)?;
+            }
+        }
+
+        Command::Clock => {
+            let (root, _) = load()?;
+            clock::show(&root)?;
+        }
+
+        Command::Init { hooks } => {
             let root = std::env::current_dir()?;
             let config_path = root.join("cairns.toml");
             if !config_path.exists() {
@@ -373,14 +653,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let config = Config::parse(&std::fs::read_to_string(&config_path)?)?;
             std::fs::create_dir_all(root.join(&config.paths.entries))?;
 
-            write_skill(&root, "worklog", |existing| render_skill(&config, existing))?;
-            // The reference has a skill of its own, because writing a page is a
-            // different job from writing an entry - and only where there is a
-            // reference to write.
-            if config.docs.is_some() {
-                write_skill(&root, "reference", |existing| {
-                    render_reference_skill(&config, existing)
-                })?;
+            write_skills(&root, &config)?;
+            if hooks {
+                add_clock_hook(&root)?;
             }
 
             // Adoption preserves what is there, the same way it freezes slugs.
@@ -433,7 +708,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let (root, config) = load()?;
             let target = pick_target(&config, target.as_deref())?;
             let built = build_log(&root, &config, stamp(false))?;
-            let rendered = cairns_site::render(&built)?;
+            let rendered = render_site(&root, &built)?;
 
             match target.kind {
                 TargetKind::Dir => {
@@ -511,7 +786,16 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     )?;
                 }
                 DocCommand::Cite { page, entries } => doc::cite(&root, &config, &page, &entries)?,
-                DocCommand::List => doc::list(&root, &config)?,
+                DocCommand::List { strict } => {
+                    let flagged = doc::list(&root, &config)?;
+                    if strict && flagged > 0 {
+                        return Err(format!(
+                            "{flagged} {} to look at",
+                            if flagged == 1 { "page" } else { "pages" }
+                        )
+                        .into());
+                    }
+                }
             }
         }
 
@@ -686,6 +970,13 @@ fn build_log(
             };
         }
     }
+    // Code references, resolved against this checkout once for the whole log,
+    // and the places the code mentions the log back.
+    built.code = code::resolve_all(root, &built);
+    built.mentions = refs::scan(root, config);
+    for entry in &mut built.entries {
+        entry.attachments = attachments(root, &entry.path);
+    }
     // A stylesheet named and missing is an error, not a warning: the site would
     // build, look wrong, and say nothing about why.
     if let Some(path) = &config.site.stylesheet {
@@ -859,6 +1150,15 @@ test    = "harnesses and fixtures"
 /// entry's own and a second one is the most common thing handed over with it.
 pub fn compose_body(body: Option<&str>, unknown: Option<&str>) -> Result<String, String> {
     let unknown = unknown.map(str::trim);
+    // `-` means stdin for `--body`, and it is easy to give it here by habit -
+    // which wrote an entry whose open question was a lone dash.
+    if unknown == Some("-") {
+        return Err(
+            "--unknown takes the text itself, not `-`: say what is open, or \
+                    `nothing`, or put a **Still unknown:** list at the end of the body"
+                .into(),
+        );
+    }
     let Some(body) = body else {
         // The stub: prose to write, the trailer filled if it was given.
         return Ok(format!(
@@ -880,6 +1180,27 @@ pub fn compose_body(body: Option<&str>, unknown: Option<&str>) -> Result<String,
     }
 
     let marker = cairns_core::entry::STILL_UNKNOWN;
+    // "nothing about X" reads as closed and may not be. The entry being
+    // written can still say which it means; history cannot, so only new
+    // entries are held to it.
+    let trailer = unknown.map(str::to_string).or_else(|| {
+        body.match_indices(marker)
+            .filter(|(at, _)| *at == 0 || body[..*at].ends_with('\n'))
+            .last()
+            .map(|(at, _)| body[at + marker.len()..].to_string())
+    });
+    if trailer
+        .as_deref()
+        .is_some_and(cairns_core::entry::hedged_nothing)
+    {
+        return Err(
+            "the trailer starts with \"nothing\" and then qualifies it, which reads \
+                    as closed and may not be. Write `nothing.` if this entry leaves nothing open \
+                    (a note can follow the full stop), or say what is still open without the \
+                    \"nothing\""
+                .into(),
+        );
+    }
     match (has_trailer(body), unknown) {
         (true, None) => Ok(body.to_string()),
         (true, Some(_)) => Err(format!(
@@ -960,6 +1281,326 @@ fn stale_because(found: &str, wanted: &str) -> String {
     }
 }
 
+/// The hook command: start a clock when a prompt arrives, unless one is
+/// already running, silently, and never fail the prompt - a machine without
+/// `cairns` on its path should lose the timing, not the conversation.
+const CLOCK_HOOK: &str = "cairns start --keep --quiet 2>/dev/null || true";
+
+/// Add the clock hook to `.claude/settings.json`, keeping everything else in
+/// it. Running it twice adds it once.
+///
+/// A hook rather than an instruction, because an instruction depends on a
+/// model following it and a hook does not. On every prompt it starts a clock
+/// if none is running; `cairns new` stops it. So `took:` becomes the time from
+/// the first prompt after the last entry to this one - wall-clock, as ever.
+fn add_clock_hook(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(".claude/settings.json");
+    let mut settings: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|problem| format!("{}: not JSON ({problem}); left alone", path.display()))?,
+        Err(_) => serde_json::json!({}),
+    };
+    let Some(object) = settings.as_object_mut() else {
+        return Err(format!("{}: not a JSON object; left alone", path.display()).into());
+    };
+    let hooks = object
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| format!("{}: \"hooks\" is not an object; left alone", path.display()))?;
+    let on_prompt = hooks
+        .entry("UserPromptSubmit")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| {
+            format!(
+                "{}: \"UserPromptSubmit\" is not a list; left alone",
+                path.display()
+            )
+        })?;
+    let present = on_prompt.iter().any(|group| {
+        group["hooks"].as_array().is_some_and(|list| {
+            list.iter().any(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains("cairns start"))
+            })
+        })
+    });
+    if present {
+        println!("the clock hook is already in .claude/settings.json");
+        return Ok(());
+    }
+    on_prompt.push(serde_json::json!({
+        "hooks": [{ "type": "command", "command": CLOCK_HOOK }]
+    }));
+    std::fs::create_dir_all(path.parent().expect("settings has a directory"))?;
+    std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+    println!(
+        "added the clock hook to .claude/settings.json - every prompt starts a clock if none is running"
+    );
+    Ok(())
+}
+
+/// The files in an entry's folder - `worklog/0050-the-table/` beside
+/// `0050-the-table.md` - by name within it, sub-folders included.
+fn attachments(root: &Path, entry_path: &str) -> Vec<String> {
+    let Some(stem) = entry_path.strip_suffix(".md") else {
+        return Vec::new();
+    };
+    fn walk(dir: &Path, prefix: &str, found: &mut Vec<String>) {
+        let Ok(items) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for item in items.flatten() {
+            let name = item.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = item.path();
+            let inside = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if path.is_dir() {
+                walk(&path, &inside, found);
+            } else {
+                found.push(inside);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&root.join(stem), "", &mut found);
+    found.sort();
+    found
+}
+
+/// The site, with each entry's attachments copied in beside its page. The
+/// renderer reads no files, so the bytes are added here.
+fn render_site(
+    root: &Path,
+    built: &Log,
+) -> Result<cairns_site::Rendered, Box<dyn std::error::Error>> {
+    let mut rendered = cairns_site::render(built)?;
+    for entry in &built.entries {
+        let Some(stem) = entry.path.strip_suffix(".md") else {
+            continue;
+        };
+        for name in &entry.attachments {
+            rendered.files.push(cairns_site::OutputFile {
+                path: format!("{}-{}/{name}", entry.number, entry.slug),
+                bytes: std::fs::read(root.join(stem).join(name))?,
+            });
+        }
+    }
+    Ok(rendered)
+}
+
+/// Move one entry to a new number.
+///
+/// What belongs to the entry is changed: its `number:`, its `# N.` heading and
+/// its file name - the slug, which is its URL, is kept. What does not belong
+/// to it is only listed. After a merge, `[[34]]` in another entry may mean the
+/// entry that kept 34 or the one that moved, and the text cannot say which;
+/// guessing would quietly relink the past.
+fn renumber(
+    root: &Path,
+    config: &Config,
+    which: &str,
+    to: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let entries = read_entries(root, config)?;
+    let moving =
+        match which.parse::<u32>() {
+            Ok(number) => {
+                let found: Vec<&Entry> = entries
+                    .iter()
+                    .filter(|e| e.front.number == number)
+                    .collect();
+                match found.as_slice() {
+                    [one] => *one,
+                    [] => return Err(format!("no entry {number}").into()),
+                    many => return Err(format!(
+                        "{} entries are numbered {number} - name the one to move by its path:\n{}",
+                        many.len(),
+                        many.iter()
+                            .map(|e| format!("    {}", e.path))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                    .into()),
+                }
+            }
+            Err(_) => {
+                let wanted = which.trim_start_matches("./");
+                entries
+                    .iter()
+                    .find(|e| e.path == wanted || e.path.ends_with(&format!("/{wanted}")))
+                    .ok_or_else(|| format!("no entry at {which}"))?
+            }
+        };
+    let old = moving.front.number;
+    let dir = root.join(&config.paths.entries);
+    let new = match to {
+        Some(new) => new,
+        None => next_number(&dir)?,
+    };
+    if entries.iter().any(|e| e.front.number == new) {
+        return Err(format!("entry {new} already exists").into());
+    }
+
+    let old_path = root.join(&moving.path);
+    let text = std::fs::read_to_string(&old_path)?;
+    let mut rewritten = String::with_capacity(text.len());
+    let mut in_front = false;
+    let mut front_done = false;
+    let mut heading_done = false;
+    for (at, line) in text.split_inclusive('\n').enumerate() {
+        let bare = line.trim_end_matches('\n');
+        if at == 0 && bare == "---" {
+            in_front = true;
+        } else if in_front && bare == "---" {
+            in_front = false;
+            front_done = true;
+        } else if in_front && bare.starts_with("number:") {
+            rewritten.push_str(&format!("number: {new}\n"));
+            continue;
+        } else if front_done && !heading_done && bare.starts_with(&format!("# {old}. ")) {
+            heading_done = true;
+            rewritten.push_str(&format!(
+                "# {new}. {}\n",
+                &bare[format!("# {old}. ").len()..]
+            ));
+            continue;
+        }
+        rewritten.push_str(line);
+    }
+    let name = old_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let rest = name.trim_start_matches(|c: char| c.is_ascii_digit());
+    let new_path = old_path.with_file_name(format!("{new:04}{rest}"));
+    // Its attachments' folder moves with it, and the entry's links into it.
+    let old_stem = name.strip_suffix(".md").unwrap_or(name).to_string();
+    let new_stem = format!("{new:04}{}", rest.strip_suffix(".md").unwrap_or(rest));
+    let old_dir = old_path.with_file_name(&old_stem);
+    if old_dir.is_dir() {
+        std::fs::rename(&old_dir, old_path.with_file_name(&new_stem))?;
+        rewritten = rewritten.replace(&format!("]({old_stem}/"), &format!("]({new_stem}/"));
+    }
+    std::fs::write(&new_path, rewritten)?;
+    if new_path != old_path {
+        std::fs::remove_file(&old_path)?;
+    }
+    println!(
+        "{} -> {} (entry {old} is now {new})",
+        moving.path,
+        new_path.strip_prefix(root).unwrap_or(&new_path).display()
+    );
+
+    // Everything else that names the old number, for a person to check.
+    let mut mentions = Vec::new();
+    for entry in entries.iter().filter(|e| e.path != moving.path) {
+        if cairns_core::entry::references(&entry.body)
+            .iter()
+            .any(|r| r.number == old)
+        {
+            mentions.push(format!("{}: references [[{old}]]", entry.path));
+        }
+        for (key, list) in [
+            ("resolves", &entry.front.resolves),
+            ("carries", &entry.front.carries),
+        ] {
+            if list.iter().any(|q| q.entry == old) {
+                mentions.push(format!("{}: {key} {old}", entry.path));
+            }
+        }
+        if entry.front.supersedes.contains(&old) {
+            mentions.push(format!("{}: supersedes {old}", entry.path));
+        }
+    }
+    for doc in read_docs(root, config)? {
+        if doc.worklog.contains(&old) {
+            mentions.push(format!("{}: worklog {old}", doc.path));
+        }
+    }
+    if !mentions.is_empty() {
+        println!(
+            "\n{} other {} entry {old}. Each means either the entry that kept {old} or the \
+             one now {new}; change the ones that meant this one:",
+            mentions.len(),
+            if mentions.len() == 1 {
+                "place names"
+            } else {
+                "places name"
+            }
+        );
+        for mention in mentions {
+            println!("    {}", located(root, &mention));
+        }
+    }
+    let count = write_index(root, config)?;
+    println!("{count} entries -> {}", config.paths.index);
+    Ok(())
+}
+
+/// A `check` problem as `path:line: message`, the form editors and terminals
+/// jump to - the line the problem is about, as near as the message says: the
+/// front matter key it names, the line holding a bad `[[N]]`, the trailer.
+/// A problem with no file of its own is left as it is.
+fn located(root: &Path, problem: &str) -> String {
+    let Some((path, message)) = problem.split_once(": ") else {
+        return problem.to_string();
+    };
+    let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+        return problem.to_string();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let first =
+        |pred: &dyn Fn(&str) -> bool| lines.iter().position(|line| pred(line)).map(|at| at + 1);
+    let key = |name: &str| {
+        let prefix = format!("{name}:");
+        first(&|line: &str| line.starts_with(&prefix))
+    };
+    let named = [
+        "number",
+        "title",
+        "date",
+        "area",
+        "files",
+        "supersedes",
+        "resolves",
+        "carries",
+        "took",
+        "worklog",
+        "status",
+    ]
+    .into_iter()
+    .find(|name| {
+        message.starts_with(&format!("{name} "))
+            || message.starts_with(&format!("`{name}`"))
+            || message.contains(&format!("unknown {name} "))
+            || (*name == "worklog" && message.starts_with("cites worklog"))
+    });
+    let marker = cairns_core::entry::STILL_UNKNOWN;
+    let line = if let Some(name) = named {
+        key(name)
+    } else if let Some(rest) = message.strip_prefix("references [[") {
+        let number = rest.split(']').next().unwrap_or("");
+        let needle = format!("[[{number}");
+        first(&|line: &str| line.contains(&needle))
+    } else if message.contains("is empty") && message.contains(marker) {
+        first(&|line: &str| line.starts_with(marker))
+    } else if message.contains(marker) {
+        Some(lines.len().max(1))
+    } else {
+        None
+    };
+    format!("{path}:{}: {message}", line.unwrap_or(1))
+}
+
 /// A `--body` value: the text itself, or `-` for stdin.
 fn read_body(body: Option<String>) -> Result<Option<String>, Box<dyn std::error::Error>> {
     Ok(match body.as_deref() {
@@ -995,18 +1636,91 @@ fn write_skill(
                  the parts\nthis project wrote and run init again."
             );
         }
+        // Said, rather than rewritten silently: after an upgrade the question
+        // is what changed.
         _ => {
             let (rendered, preserved) = render(existing.as_deref());
-            std::fs::write(&skill, rendered)?;
+            let state = match existing.as_deref() {
+                Some(old) if old == rendered => "unchanged",
+                Some(_) => "updated",
+                None => "wrote",
+            };
+            if state != "unchanged" {
+                std::fs::write(&skill, &rendered)?;
+            }
             println!(
-                "wrote .claude/skills/{name}/SKILL.md{}",
-                if preserved {
+                "{state} .claude/skills/{name}/SKILL.md{}",
+                if preserved && state != "unchanged" {
                     " (project section kept)"
                 } else {
                     ""
                 }
             );
         }
+    }
+    Ok(())
+}
+
+/// Every skill this project should have, written or refreshed.
+fn write_skills(root: &Path, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    write_skill(root, "worklog", |existing| render_skill(config, existing))?;
+    // The clock is a skill of its own because skills are picked by their
+    // description, and the worklog skill's says "when work finishes" - matched
+    // at the end, too late to start a clock. This one's says "when work
+    // begins".
+    write_skill(root, "clock", |existing| {
+        keep_project_section(
+            include_str!("../templates/CLOCK.md").replace("{{project}}", &config.project.name),
+            existing,
+        )
+    })?;
+    // The reference has a skill of its own, because writing a page is a
+    // different job from writing an entry - and only where there is a
+    // reference to write.
+    if config.docs.is_some() {
+        write_skill(root, "reference", |existing| {
+            render_reference_skill(config, existing)
+        })?;
+    }
+    Ok(())
+}
+
+/// Bring an existing clock hook up to the command this version writes. Adds
+/// nothing: a project that never asked for the hook does not get one from an
+/// update.
+fn refresh_clock_hook(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(".claude/settings.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(());
+    };
+    let mut changed = false;
+    let mut found = false;
+    if let Some(groups) = settings["hooks"]["UserPromptSubmit"].as_array_mut() {
+        for group in groups {
+            if let Some(hooks) = group["hooks"].as_array_mut() {
+                for hook in hooks {
+                    if hook["command"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("cairns start"))
+                    {
+                        found = true;
+                        if hook["command"] != CLOCK_HOOK {
+                            hook["command"] = serde_json::Value::from(CLOCK_HOOK);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if changed {
+        std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+        println!("updated the clock hook in .claude/settings.json");
+    } else if found {
+        println!("unchanged the clock hook in .claude/settings.json");
     }
     Ok(())
 }
@@ -1309,6 +2023,25 @@ mod tests {
     }
 
     #[test]
+    fn the_clock_has_a_skill_that_triggers_at_the_start() {
+        let skill = include_str!("../templates/CLOCK.md");
+        let description = skill
+            .lines()
+            .find(|l| l.starts_with("description:"))
+            .unwrap();
+        // Picked by its description: it has to say "beginning", not "finished".
+        assert!(description.contains("when beginning"), "{description}");
+        assert!(skill.contains(SKILL_MARKER));
+        let (kept, preserved) = keep_project_section(
+            skill.to_string(),
+            Some(&format!(
+                "old\n{SKILL_MARKER}\n## This project\n\nTime the decoding only.\n"
+            )),
+        );
+        assert!(preserved && kept.ends_with("Time the decoding only.\n"));
+    }
+
+    #[test]
     fn base64_matches_the_standard_vectors() {
         for (input, encoded) in [
             ("", ""),
@@ -1321,6 +2054,26 @@ mod tests {
         ] {
             assert_eq!(base64(input.as_bytes()), encoded);
         }
+    }
+
+    #[test]
+    fn a_dash_for_unknown_is_refused() {
+        assert!(compose_body(Some("Prose."), Some("-")).is_err());
+    }
+
+    #[test]
+    fn a_hedged_nothing_is_refused_for_a_new_entry() {
+        assert!(compose_body(Some("Prose."), Some("nothing about the offset")).is_err());
+        assert!(
+            compose_body(Some("Prose.\n\n**Still unknown:** nothing new here."), None).is_err()
+        );
+        assert!(
+            compose_body(
+                Some("Prose."),
+                Some("nothing. The test runs on Mutation only.")
+            )
+            .is_ok()
+        );
     }
 
     #[test]

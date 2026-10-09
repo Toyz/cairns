@@ -23,6 +23,13 @@ One file per entry means the next number is a filename lookup rather than a read
 of the whole log, an entry can be found by grepping front matter instead of
 scrolling, and two entries written in the same session do not collide in a diff.
 
+## How long it took
+
+The `clock` skill starts a clock when work begins (`cairns start`), and
+`cairns new` records how long it ran as the entry's `took:`. Do not estimate
+the time yourself. If no clock was running, the entry simply records none; if
+the work spanned a break, `cairns new --took 45m` gives the time spent instead.
+
 ## Writing one
 
 Write the whole entry in one command, with the prose on stdin:
@@ -72,14 +79,31 @@ say so; it is truer than picking whichever it was mostly.
 Other commands:
 
 ```sh
-cairns next     # the number the next entry would take
-cairns index    # regenerate the index
-cairns open     # every unresolved question in the log
-cairns check    # numbering sound, front matter complete, index current
+cairns next                 # the number the next entry would take
+cairns index                # regenerate the index
+cairns open                 # every unresolved question in the log
+cairns check                # numbering sound, front matter complete, index current
+cairns ls :area and open    # the entries a query matches - has word, took gt 2h, date ge ...
+cairns refs 12              # where entry 12 is mentioned, in the log and in the code
 ```
+
+Read what the log already knows before starting on something: `cairns ls has
+<word>` and `cairns open` find the entries and questions that touch it.
+
+**Two entries with one number** - after merging a branch that also wrote the
+next entry - `check` names them, and `cairns renumber <path>` moves one; it
+lists the other places that named the number, to check by hand.
+
+**A screenshot or capture** goes with the entry: `cairns new ... --attach
+shot.png`, linking it in the body as `![what it shows](shot.png)`.
+
+**In code**, a comment that says `see worklog N` is found and shown on entry
+N's page, linking back to the line.
 
 Run `check` before finishing. It catches a stale index, a file whose name no
 longer matches its title, a missing date, and an area nobody has heard of.
+`cairns check --fix` regenerates a stale index - after editing `cairns.toml`,
+say - and still reports everything else.
 
 ## When to write an entry
 
@@ -128,6 +152,11 @@ Sub-headings inside an entry use `##` - the entry's own title is the `#`.
 across the whole log. It is the log's list of what the project does not yet
 know, so it is worth writing honestly rather than leaving blank.
 
+`nothing.` closes the entry - a note may follow the full stop:
+`**Still unknown:** nothing. The test runs on Mutation only.` Do not write
+`nothing about X` or `nothing new`: it reads as closed and may not be, and
+`cairns new` refuses it. Either nothing is open, or say what is.
+
 When more than one thing is open, make it a list - each item one question,
 specific enough that a later entry could answer it:
 
@@ -170,6 +199,25 @@ through, naming what closed it.
 They are not interchangeable. Answering a question does not mean the entry that
 asked it was wrong, and `check` will reject a `resolves` aimed at an entry that
 left no question open.
+
+**One question of a list.** A trailer written as a list is numbered on its
+page. `--resolves 6.2` answers only the second; the rest stay open.
+
+**`carries`** - this entry takes questions over without answering them: a
+triage pass gathering what is open into its own list. Use it, never
+`resolves`, for that - `resolves` tells every reader of the old entries their
+questions were answered.
+
+```sh
+cairns new "Open questions after the triage" --area spec --carries 6,9.1,9.3 ...
+```
+
+## Pointing at code
+
+`[[src/thing.rs#parse_header]]` links to a definition by name - prefer it to
+line numbers, which move. `[[src/thing.rs:120-158]]` links to lines;
+`@3fbdc65` after either pins it to a commit; `![[...]]` embeds the code in the
+entry instead of linking it. `files:` takes the same forms.
 
 ## The reference
 

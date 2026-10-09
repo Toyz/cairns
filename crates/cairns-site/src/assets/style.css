@@ -502,6 +502,16 @@ input[type="search"]:focus { outline: none; border-color: var(--rule); backgroun
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+/* Time, wherever it is shown, is the quietest thing on the line. */
+.took, .day-took { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.day-took { margin-left: auto; font-weight: 400; }
+.row .meta .took { margin-left: -0.35rem; }
+.row .meta .took::before, .dateline .took::before { content: "\00b7"; margin-right: 0.4rem; }
+.dateline .took::before { margin: 0 0.4rem 0 0; }
+.glance-stats .wide { grid-column: 1 / -1; }
+.area-time { margin-right: 0.6rem; font-variant-numeric: tabular-nums; opacity: 0.8; }
+@media (max-width: 62rem) { .area-time { display: none; } }
+
 .day-count {
   color: var(--ink-faint);
   font-weight: 400;
@@ -867,6 +877,11 @@ article > *:last-child { margin-bottom: 0; }
 .files a { color: var(--ink-soft); text-decoration: none; }
 .files a:hover { color: var(--accent); }
 .files code { font-size: 0.95em; background: none; padding: 0; }
+/* What a reference page covers: items, not links, quieter than an entry's
+   files, comma-separated within a group. */
+.covers code { color: var(--ink-soft); }
+.covers .files-group { gap: 0 0.5rem; }
+.covers .files-group code:not(:last-child)::after { content: ","; color: var(--ink-faint); }
 
 /* A directory is said once and its files follow it, so the directory is the
    quiet part and the names are what the eye lands on. */
@@ -935,6 +950,29 @@ p code, li code, td code, .summary code {
   border-radius: 0.25rem;
 }
 pre code { background: none; padding: 0; }
+
+/* Code named in prose: a link to its lines, quiet until hovered. */
+a.code-ref { text-decoration: none; }
+a.code-ref code { color: var(--link); }
+a.code-ref:hover code { text-decoration: underline; }
+.code-ref--missing { text-decoration: line-through; color: var(--ink-faint); cursor: help; }
+/* Code embedded from the repository: a block with where it came from above it. */
+.code-embed { margin: 0 0 var(--space-3); }
+.code-embed figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0.4rem var(--space-3);
+  border: 1px solid var(--rule-faint);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--paper-sunk);
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+}
+.code-embed figcaption code { background: none; padding: 0; }
+.code-embed pre { margin: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
 
 /* Highlighted code. A handful of scopes carry colour; everything else - the
    punctuation, the operators, the plain identifiers - stays ink, so the
@@ -1018,7 +1056,24 @@ th {
    the way a notebook strikes one out, with the answer named. */
 .unknown--answered { opacity: 0.85; }
 .unknown--answered strong { color: var(--ink-faint); }
-.unknown--answered .unknown-text { text-decoration: line-through; color: var(--ink-faint); }
+.unknown--answered > .unknown-text { text-decoration: line-through; color: var(--ink-faint); }
+.unknown--answered .numbered .closed { text-decoration: none; }
+/* Carried: still open, elsewhere. Quiet, never struck. */
+.unknown--carried > .unknown-text { color: var(--ink-faint); }
+/* A list trailer, numbered: those numbers are how a later entry names one. */
+.unknown .numbered { margin: 0; padding-left: 1.6rem; }
+.unknown .numbered li + li { margin-top: var(--space-1); }
+.unknown .numbered li::marker { color: var(--ink-faint); font-family: var(--font-ui); font-size: var(--step--1); }
+.unknown .numbered .closed .q-text { text-decoration: line-through; color: var(--ink-faint); }
+.unknown .numbered .carried .q-text { color: var(--ink-faint); }
+.q-note {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+}
+.q-note a { color: var(--ink-soft); }
 .unknown .answered {
   margin-top: var(--space-1);
   font-family: var(--font-ui);
@@ -1111,6 +1166,9 @@ nav.pager .label {
 .question p { margin: 0; }
 .question p + p, .question p + ul, .question ul + p { margin-top: var(--space-1); }
 .question ul, .question ol { margin: 0; padding-left: 1.1rem; }
+.question ol.numbered { padding-left: 1.6rem; }
+.question ol.numbered li::marker { color: var(--ink-faint); font-family: var(--font-ui); font-size: var(--step--1); }
+.question ol.numbered .closed { text-decoration: line-through; color: var(--ink-faint); }
 .question li + li { margin-top: 0.4rem; }
 .question li::marker { color: var(--accent); }
 /* The rest of a long list, folded in the page as served. Its summary sits where

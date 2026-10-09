@@ -200,8 +200,20 @@ label = "Reference"
 
 The tree is walked recursively. A page's front matter is the same strict subset
 an entry uses, with different keys: `title`, an optional
-`status` of `solid`, `partial` or `guess`, and `worklog`, a comma-separated list
-of the entry numbers that established it.
+`status` of `solid`, `partial` or `guess`, `worklog`, a comma-separated list
+of the entry numbers that established it, and `covers`, what the page accounts
+for in the thing it documents - files, addresses, functions - as groups
+separated by `;` of items separated by `,`:
+
+```
+covers: INF gcmn.prg:0x005c1440 DUNGEON::SetClutList, 0x005c17b0 DUNGEON::ChangeClut; INF SLUS_202.67:0x0013aad0 ccModel::ChangeClut
+```
+
+A page shows what it covers under its title, the way an entry shows its files.
+
+A page's own open questions go in a section headed `## Unknown` (or
+`Unknowns`, `Still unknown`, `Open questions`). The open questions page
+collects them beside the log's, under each page's name.
 
 `worklog` is the edge that makes keeping both worthwhile. The page states what
 is true; the entries say how that was found out. It is rendered in both
