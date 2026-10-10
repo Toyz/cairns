@@ -312,6 +312,17 @@ pub struct OpenQuestion {
     pub items: Vec<Question>,
 }
 
+/// The version this build is. A release says its own, stamped from its tag; a
+/// build from source is `0.0.0-dev`, unless it was told what `git describe`
+/// says - `0.10.1-2-gf958c93`, two commits past 0.10.1 - which is how this
+/// repo's own site, built from `main`, says what it was built from.
+fn version() -> &'static str {
+    match option_env!("CAIRNS_DESCRIBE") {
+        Some(described) if !described.is_empty() => described.trim_start_matches('v'),
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
+
 /// The references that name a whole entry, as its number.
 fn whole_refs(questions: &[crate::entry::QuestionRef]) -> Vec<u32> {
     questions
@@ -618,7 +629,7 @@ impl Log {
 
         Log {
             spec_version: crate::SPEC_VERSION,
-            generator: format!("cairns {}", env!("CARGO_PKG_VERSION")),
+            generator: format!("cairns {}", version()),
             generated,
             project: ProjectInfo {
                 name: config.project.name.clone(),

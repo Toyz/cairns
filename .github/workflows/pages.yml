@@ -22,9 +22,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Tags too, so the build can say which release it is - or how far past
+      # one - in the site's footer, rather than "a development build".
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: echo "CAIRNS_DESCRIBE=$(git describe --tags --always)" >> "$GITHUB_ENV"
       - run: cargo run --quiet -p cairns -- check
       - run: cargo run --quiet -p cairns -- build --out site
       - uses: actions/upload-pages-artifact@v5

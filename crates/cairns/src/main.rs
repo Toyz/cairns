@@ -10,6 +10,7 @@ mod code;
 mod doc;
 mod git;
 mod mcp;
+mod pages;
 mod refs;
 mod serve;
 mod workspace;
@@ -357,6 +358,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
         Command::Build { out } => {
             let (root, config) = load()?;
+            // Said, so an address that was guessed is never a surprise.
+            match &config.site.base_url_from {
+                Some(from) => eprintln!(
+                    "base_url: {} - from {from}; set site.base_url in cairns.toml to change it",
+                    config.site.base_url
+                ),
+                None if config.site.base_url.is_empty() => eprintln!(
+                    "base_url is not set and could not be worked out - the feed, ids.json and \
+                     every page's canonical link will have no address. Set site.base_url in \
+                     cairns.toml"
+                ),
+                None => {}
+            }
             let built = build_log(&root, &config, stamp(false))?;
             let rendered = render_site(&root, &built)?;
             for file in &rendered.files {
@@ -916,22 +930,35 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Find `cairns.toml` by walking up from the working directory, so the command
-/// works from anywhere in the repo.
 /// `cairns.toml` at a root already found, read again - for `serve`, which
 /// watches it.
 fn load_config(root: &Path) -> Result<Config, Box<dyn std::error::Error>> {
-    Ok(Config::parse(&std::fs::read_to_string(
-        root.join("cairns.toml"),
-    )?)?)
+    let mut config = Config::parse(&std::fs::read_to_string(root.join("cairns.toml"))?)?;
+    infer_base_url(root, &mut config);
+    Ok(config)
 }
 
+/// Fill an unset `site.base_url` with the Pages address the repository
+/// implies, noting where it came from.
+fn infer_base_url(root: &Path, config: &mut Config) {
+    if !config.site.base_url.trim().is_empty() {
+        return;
+    }
+    if let Some((url, from)) = pages::infer(root, config.project.repository.as_deref()) {
+        config.site.base_url = url;
+        config.site.base_url_from = Some(from);
+    }
+}
+
+/// Find `cairns.toml` by walking up from the working directory, so the command
+/// works from anywhere in the repo.
 fn load() -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     let mut dir = std::env::current_dir()?;
     loop {
         let candidate = dir.join("cairns.toml");
         if candidate.is_file() {
-            let config = Config::parse(&std::fs::read_to_string(&candidate)?)?;
+            let mut config = Config::parse(&std::fs::read_to_string(&candidate)?)?;
+            infer_base_url(&dir, &mut config);
             return Ok((dir, config));
         }
         if !dir.pop() {
@@ -1788,8 +1815,8 @@ fn docs_section(config: &Config) -> String {
          This project also keeps reference pages under `{dir}/` - what is true now, for\n\
          someone who wants to use it rather than read how it was found. When an entry\n\
          establishes something a reader would look up - a layout, a table, a rule -\n\
-         write or correct the page too (the `reference` skill says how), and cite the\n\
-         entry on it:\n\n\
+         write or correct the page too, as this project's skill for its reference\n\
+         pages says, and cite the entry on it:\n\n\
          ```sh\n\
          cairns doc cite formats/the-archive 31\n\
          ```\n\n\

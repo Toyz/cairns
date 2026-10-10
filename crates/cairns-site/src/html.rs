@@ -969,6 +969,22 @@ fn generator_html(generator: &str) -> String {
         return "<a href=\"https://github.com/Toyz/cairns\">cairns</a> (a development build)"
             .to_string();
     }
+    // `git describe` past a release: `0.10.1-2-gf958c93` - the release, how
+    // many commits beyond it, and the commit itself, which is what it links to.
+    let parts: Vec<&str> = version.rsplitn(3, '-').collect();
+    if let [commit, count, release] = parts.as_slice()
+        && let Some(commit) = commit.strip_prefix('g')
+        && count.chars().all(|c| c.is_ascii_digit())
+    {
+        return format!(
+            "<a href=\"https://github.com/Toyz/cairns/commit/{commit}\">cairns {release} + {count} \
+             commit{plural}</a>",
+            plural = if *count == "1" { "" } else { "s" },
+            commit = escape(commit),
+            release = escape(release),
+            count = escape(count)
+        );
+    }
     format!(
         "<a href=\"https://github.com/Toyz/cairns/releases/tag/v{v}\">cairns {v}</a>",
         v = escape(version)
@@ -2633,6 +2649,10 @@ mod footer_tests {
             "<a href=\"https://github.com/Toyz/cairns/releases/tag/v0.10.1\">cairns 0.10.1</a>"
         );
         assert!(generator_html("cairns 0.0.0-dev").contains("development build"));
+        assert_eq!(
+            generator_html("cairns 0.10.1-2-gf958c93"),
+            "<a href=\"https://github.com/Toyz/cairns/commit/f958c93\">cairns 0.10.1 + 2 commits</a>"
+        );
     }
 }
 

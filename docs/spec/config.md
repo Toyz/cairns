@@ -65,6 +65,17 @@ in, so an existing project adopts cairns without moving a single file.
 written file-relative, so one build serves correctly from a GitHub Pages
 sub-path and from a domain root without re-rendering.
 
+When `base_url` is not set, it is worked out where the address follows from
+the repository - GitHub Pages or GitLab Pages - from, in order: GitLab CI's
+`CI_PAGES_URL`, which is the address itself; GitHub Actions'
+`GITHUB_REPOSITORY`; GitLab CI's `CI_PROJECT_PATH`; `project.repository`; and
+the checkout's `origin` remote. `https://github.com/owner/repo` is published at
+`https://owner.github.io/repo/`, a repository named `owner.github.io` at the
+root, and GitLab the same with `gitlab.io` and subgroups in the path.
+`cairns build` says what it used and where from. A custom domain cannot be
+worked out; a site on one sets `base_url`. Without either, a build says so:
+the feed, `ids.json` and every page's canonical link have no address.
+
 `theme` names a built-in theme, or a path to one.
 
 `stylesheet` names a CSS file of the project's own. It is appended to the

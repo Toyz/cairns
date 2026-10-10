@@ -228,8 +228,8 @@ entry instead of linking it. `files:` takes the same forms.
 This project also keeps reference pages under `docs/` - what is true now, for
 someone who wants to use it rather than read how it was found. When an entry
 establishes something a reader would look up - a layout, a table, a rule -
-write or correct the page too (the `reference` skill says how), and cite the
-entry on it:
+write or correct the page too, as this project's skill for its reference
+pages says, and cite the entry on it:
 
 ```sh
 cairns doc cite formats/the-archive 31

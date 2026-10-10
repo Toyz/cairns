@@ -187,6 +187,11 @@ pub struct Site {
     /// Pages sub-path and from a domain root alike.
     #[serde(default)]
     pub base_url: String,
+    /// Where `base_url` came from when it was not written but worked out - a
+    /// GitHub or GitLab Pages address from the repository. Never read from the
+    /// file.
+    #[serde(skip)]
+    pub base_url_from: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
     /// A markdown file shown on the site, so a reader arriving at a worklog
