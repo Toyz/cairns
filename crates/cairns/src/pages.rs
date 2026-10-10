@@ -32,6 +32,40 @@ pub fn infer(root: &Path, repository: Option<&str>) -> Option<(String, String)> 
     from_remote(&origin).map(|url| (url, "the git remote origin".into()))
 }
 
+/// The repository's web address, when `project.repository` does not say -
+/// from CI, or this checkout's `origin` - for GitHub and GitLab, whose
+/// addresses follow from the path. What a README's links and the license
+/// files are linked into.
+pub fn infer_repository(root: &Path) -> Option<String> {
+    if let Some(url) = env("CI_PROJECT_URL") {
+        return Some(url.trim_end_matches('/').to_string());
+    }
+    if let Some(path) = env("GITHUB_REPOSITORY") {
+        let server = env("GITHUB_SERVER_URL").unwrap_or_else(|| "https://github.com".into());
+        return Some(format!("{}/{path}", server.trim_end_matches('/')));
+    }
+    web_address(&origin(root)?)
+}
+
+/// A remote's URL - `git@github.com:Owner/repo.git` - as the repository's web
+/// address, `https://github.com/Owner/repo`, for GitHub and GitLab.
+pub fn web_address(remote: &str) -> Option<String> {
+    let remote = remote.trim();
+    let (host, path) = if let Some(rest) = remote.strip_prefix("git@") {
+        rest.split_once(':')?
+    } else {
+        let rest = remote.split_once("://")?.1;
+        let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+        rest.split_once('/')?
+    };
+    let host = host.to_ascii_lowercase();
+    if host != "github.com" && host != "gitlab.com" {
+        return None;
+    }
+    let path = path.trim_matches('/').trim_end_matches(".git");
+    (path.split('/').count() >= 2).then(|| format!("https://{host}/{path}"))
+}
+
 fn env(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -118,6 +152,14 @@ mod tests {
             Some("https://toyz.github.io/cairns/")
         );
         assert_eq!(from_remote("https://codeberg.org/x/y"), None);
+        assert_eq!(
+            super::web_address("git@github.com:Toyz/piney_apples.git").as_deref(),
+            Some("https://github.com/Toyz/piney_apples")
+        );
+        assert_eq!(
+            super::web_address("https://user:t@gitlab.com/g/sub/p.git").as_deref(),
+            Some("https://gitlab.com/g/sub/p")
+        );
         assert_eq!(from_remote("not a url"), None);
     }
 }

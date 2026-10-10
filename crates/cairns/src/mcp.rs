@@ -632,7 +632,11 @@ fn resource(root: &Path, config: &Config, uri: &str) -> Result<(&'static str, St
     match uri {
         "worklog://index" => Ok((
             "text/markdown",
-            cairns_site::render_index(&built, config.index.header.as_deref()),
+            cairns_site::render_index(
+                &built,
+                config.index.header.as_deref(),
+                crate::published(config),
+            ),
         )),
         "worklog://open" => Ok((
             "text/markdown",

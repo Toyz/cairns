@@ -40,7 +40,8 @@ EOF
 ```
 
 That writes `{{docs}}/formats/the-data-bin-archive.md` with its front matter and
-heading. The body is the page only - no `# Title`, which the command writes.
+heading, and puts it in the index. Front matter the project adds goes in with
+`--set key=value`, once per key - `--set covers="DATA.BIN, the index table"`. The body is the page only - no `# Title`, which the command writes.
 Quote the heredoc marker so backticks and `$` arrive as written.
 
 ```markdown

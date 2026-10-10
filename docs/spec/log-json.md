@@ -1,7 +1,7 @@
 ---
 title: log.json
 status: solid
-worklog: 1, 6
+worklog: 1, 6, 36, 39
 spec_version: 1
 ---
 
@@ -129,6 +129,18 @@ question with its own `resolved_by` and `carried_to`. An open question's
 **`code`** maps each code reference's key - `src/a.rs#name`, `src/a.rs:12-40`,
 with `@rev` when pinned - to where it was found (`path`, `lines`, `rev`), the
 code itself when it is embedded (`text`), or why it was not (`missing`).
+
+**`project.license`** and **`project.text_license`** are the code's and the
+text's licenses, SPDX expressions - `text_license` absent when it is the
+code's. **`project.license_files`** are the license files at the root, each with
+the license its text is when that is certain.
+
+**`docs_sections`** and **`docs_fields`** are `[[docs.section]]` and
+`[[docs.field]]` as declared. A page's **`changed`** is the day it last changed,
+`YYYY-MM-DD`, from the repository's history: the newest commit whose version of
+the file differs from its first parent's, or the day of the build for a page
+changed and not yet committed - which is the one field that differs between
+two runs over the same files, and only while they are uncommitted.
 
 **`extra`** holds any front matter key the spec does not define, passed through
 untouched, so a project can carry its own metadata without forking the format

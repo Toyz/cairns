@@ -9,6 +9,7 @@ pub mod feed;
 mod highlight;
 pub mod html;
 pub mod icon;
+pub mod reference;
 
 use cairns_core::Log;
 use serde::Serialize;
@@ -62,6 +63,7 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     }
     if !log.docs.is_empty() {
         rendered.push("docs/index.html", html::docs_index(log));
+        let backlinks = html::backlinks(log);
         for doc in &log.docs {
             // The docs root's own README is already rendered as the index by
             // `docs_index`; giving it a page of its own writes `docs//`.
@@ -70,7 +72,7 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
             }
             rendered.push(
                 format!("docs/{}/index.html", doc.slug),
-                html::doc_page(log, doc),
+                html::doc_page(log, doc, &backlinks),
             );
         }
     }
@@ -203,7 +205,11 @@ fn stylesheet(log: &Log) -> String {
 /// Generated, and named as such in its own first lines, because the failure
 /// mode it exists to prevent is somebody editing it to match what they think
 /// the entries say.
-pub fn render_index(log: &Log, header: Option<&str>) -> String {
+///
+/// `site` is where the log is published, when the project says so itself - an
+/// address worked out from CI would differ between a fork's CI and a
+/// checkout, and the index would be stale in one of them.
+pub fn render_index(log: &Log, header: Option<&str>, site: Option<&str>) -> String {
     let mut out = String::new();
 
     match header {
@@ -235,20 +241,112 @@ pub fn render_index(log: &Log, header: Option<&str>) -> String {
         .join(", ");
     let total = log.entries.len();
     let plural = if total == 1 { "entry" } else { "entries" };
-    out.push_str(&format!("{total} {plural}: {tally}.\n\n"));
+    out.push_str(&format!("{total} {plural}: {tally}."));
+    let open = log.open_questions.len();
+    if open > 0 {
+        out.push_str(&format!(
+            " {open} {} still {} open questions - [listed below](#still-open).",
+            if open == 1 { "entry" } else { "entries" },
+            if open == 1 { "has" } else { "have" },
+        ));
+    }
+    if let Some(site) = site.map(str::trim).filter(|site| !site.is_empty()) {
+        out.push_str(&format!(" Read it as a site at <{site}>."));
+    }
+    out.push_str("\n\n");
 
+    // A corrected entry says so in its row, as it does on its page: the
+    // index is where a reader picks what to read, and an entry a later one
+    // overturned is not the one to start from.
+    let link = |number: u32| match log.entry(number) {
+        Some(entry) => format!("[{number}]({})", entry.path),
+        None => number.to_string(),
+    };
     out.push_str("| # | Entry | Date | Area |\n| ---: | --- | --- | --- |\n");
     for entry in &log.entries {
         let title = entry.title.replace('|', "\\|");
+        let corrected = if entry.superseded_by.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " - *corrected by {}*",
+                entry
+                    .superseded_by
+                    .iter()
+                    .map(|n| link(*n))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         out.push_str(&format!(
-            "| {} | [{title}]({}) | {} | {} |\n",
+            "| {} | [{title}]({}){corrected} | {} | {} |\n",
             entry.number,
             entry.path,
             entry.date,
             entry.areas.join(", ")
         ));
     }
+
+    // What the log does not know yet, one line an entry, newest first: the
+    // open questions are the log's to-do list, and on a forge this file is
+    // the only place they can be seen together.
+    if open > 0 {
+        out.push_str("\n## Still open\n\n");
+        for question in log.open_questions.iter().rev() {
+            let Some(entry) = log.entry(question.entry) else {
+                continue;
+            };
+            let count = if question.items.len() > 1 {
+                format!(" ({} questions)", question.items.len())
+            } else {
+                String::new()
+            };
+            out.push_str(&format!(
+                "- [{}. {}]({}){count} - {}\n",
+                entry.number,
+                entry.title.replace(['[', ']'], ""),
+                entry.path,
+                gist(&question.text)
+            ));
+        }
+    }
     out
+}
+
+/// A question's first sentence, as plain text, cut at a word near 120
+/// characters. The first of a list's questions when it is one.
+fn gist(text: &str) -> String {
+    let (preamble, items) = cairns_core::entry::question_items(text);
+    let source = match items.first() {
+        Some(first) if preamble.trim().is_empty() => first.as_str(),
+        _ => text,
+    };
+    // The paragraph, not the line: a trailer is wrapped in the file.
+    let paragraph = source
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .take_while(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let plain = html::plain_md(&paragraph)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let sentence = match plain.find(". ") {
+        Some(stop) => &plain[..=stop],
+        None => plain.as_str(),
+    };
+    if sentence.chars().count() <= 120 {
+        return sentence.to_string();
+    }
+    let cut: String = sentence.chars().take(120).collect();
+    match cut.rfind(' ') {
+        Some(at) => format!(
+            "{}...",
+            cut[..at].trim_end_matches([',', ';', ':', '.', '-', ' '])
+        ),
+        None => format!("{cut}..."),
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +457,42 @@ mod tests {
         assert!(
             page.contains("<a href=\"../about/#install\">readme</a>"),
             "{page}"
+        );
+    }
+
+    #[test]
+    fn the_footer_says_how_the_text_and_the_code_are_licensed() {
+        let mut built = simple();
+        let footer = |log: &Log| {
+            let page = html::open_questions(log);
+            let at = page.find("<footer>").unwrap();
+            page[at..page.find("</footer>").unwrap()].to_string()
+        };
+        assert!(!footer(&built).contains("Text"), "no license, nothing said");
+        built.project.license = Some("MIT OR Apache-2.0".into());
+        let both = footer(&built);
+        assert!(
+            both.contains(
+                "Text and code <a href=\"https://spdx.org/licenses/MIT.html\">MIT</a> OR"
+            ),
+            "{both}"
+        );
+        built.project.repository = Some("https://github.com/o/r".into());
+        built.project.license_files = vec![cairns_core::log::LicenseFile {
+            path: "LICENSE-MIT".into(),
+            license: Some("MIT".into()),
+        }];
+        built.project.text_license = Some("CC-BY-4.0".into());
+        let apart = footer(&built);
+        assert!(
+            apart.contains(
+                "Text <a href=\"https://creativecommons.org/licenses/by/4.0/\">CC-BY-4.0</a>"
+            ),
+            "{apart}"
+        );
+        assert!(
+            apart.contains("<a href=\"https://github.com/o/r/blob/HEAD/LICENSE-MIT\">MIT</a>"),
+            "{apart}"
         );
     }
 
@@ -680,5 +814,148 @@ mod reference_tests {
     fn a_reference_to_nothing_is_left_as_text() {
         let html = page("See [[999]].");
         assert!(html.contains("[[999]]"), "{html}");
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+    use cairns_core::{Config, Doc, Entry, RawEntry};
+
+    fn built() -> Log {
+        let config = Config::parse(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n\
+             repository = \"https://example.com/p\"\n\
+             [site]\nbase_url = \"https://example.com/p/\"\n\
+             [docs]\ndir = \"docs\"\n\
+             [[docs.section]]\ndir = \"engine\"\ntitle = \"How it runs\"\nabout = \"Subsystem by subsystem.\"\n\
+             [[docs.section]]\ndir = \"formats\"\n\
+             [[docs.field]]\nname = \"volumes\"\nvalues = [\"INF\", \"all\"]\n\
+             [[area]]\nname = \"spec\"\n",
+        )
+        .unwrap();
+        let entries = [
+            (1, "", "The old claim.\n\n**Still unknown:** whether it\nholds. More after."),
+            (2, "supersedes: 1\n", "The new one.\n\n**Still unknown:** nothing."),
+        ]
+        .iter()
+        .map(|(n, extra, body)| {
+            Entry::parse(&RawEntry {
+                path: format!("worklog/000{n}-e{n}.md"),
+                bytes: format!(
+                    "---\nnumber: {n}\ntitle: E{n}\ndate: 2026-09-2{n}\narea: spec\n{extra}---\n\n# {n}. E{n}\n\n{body}\n"
+                )
+                .into_bytes(),
+            })
+            .unwrap()
+        })
+        .collect();
+        let docs = [
+            ("docs/README.md", "---\ntitle: Ref\n---\n\n# Ref\n\nOurs.\n\n<!-- cairns:index -->\n\nold listing\n"),
+            (
+                "docs/formats/a.md",
+                "---\ntitle: A | pipe\nstatus: solid\nvolumes: INF\nworklog: 1\n---\n\n# A\n\nSee [b](../engine/b.md).\n\n## Unknown\n\n- one\n- two\n",
+            ),
+            ("docs/engine/b.md", "---\ntitle: B\nstatus: partial\nworklog: 2\n---\n\n# B\n\nProse.\n"),
+        ]
+        .iter()
+        .map(|(path, text)| {
+            Doc::parse(&RawEntry {
+                path: (*path).into(),
+                bytes: text.as_bytes().to_vec(),
+            })
+            .unwrap()
+        })
+        .collect();
+        Log::build_with(&config, entries, docs, None)
+    }
+
+    #[test]
+    fn the_reference_index_is_generated_below_the_marker() {
+        let log = built();
+        let readme = log.docs.iter().find(|doc| doc.slug.is_empty()).unwrap();
+        let text = "# Ref\n\nOurs.\n\n<!-- cairns:index -->\n\nold listing\n";
+        let out = reference::regenerate(&log, readme, text).unwrap();
+        assert!(
+            out.starts_with("# Ref\n\nOurs.\n\n<!-- cairns:index -->\n\n"),
+            "{out}"
+        );
+        assert!(!out.contains("old listing"));
+        // Declared order and titles, the declared field as a column, the
+        // evidence linked from where the README is.
+        let engine = out.find("## How it runs").expect("declared title");
+        let formats = out.find("## Formats").expect("folder name");
+        assert!(engine < formats, "declared order: {out}");
+        assert!(out.contains("Subsystem by subsystem."));
+        assert!(
+            out.contains("| Page | Status | Volumes | Worklog |"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "| [A \\| pipe](formats/a.md) | solid | INF | [1](../worklog/0001-e1.md) |"
+            ),
+            "{out}"
+        );
+        // A README with no marker is the project's, and left alone.
+        assert!(reference::regenerate(&log, readme, "# Ref\n\nBy hand.\n").is_none());
+    }
+
+    #[test]
+    fn a_page_says_what_to_know_before_trusting_it() {
+        let log = built();
+        let rendered = render(&log).unwrap();
+        let page = |path: &str| {
+            String::from_utf8(
+                rendered
+                    .files
+                    .iter()
+                    .find(|file| file.path == path)
+                    .unwrap()
+                    .bytes
+                    .clone(),
+            )
+            .unwrap()
+        };
+        let a = page("docs/formats/a/index.html");
+        assert!(a.contains("Rests on a corrected entry"), "{a}");
+        assert!(a.contains("names 2 things it does not know"), "{a}");
+        assert!(a.contains("How this was found out"));
+        assert!(a.contains("https://example.com/p/blob/HEAD/docs/formats/a.md"));
+        let b = page("docs/engine/b/index.html");
+        assert!(
+            b.contains("Linked from <a href=\"../../../docs/formats/a/\">A | pipe</a>"),
+            "{b}"
+        );
+        // The index: the README's own prose, not its generated listing, then
+        // the site's rows, with the declared field, under declared titles.
+        let index = page("docs/index.html");
+        assert!(index.contains("Ours."));
+        assert!(!index.contains("old listing"));
+        assert!(
+            index.contains("<span title=\"Volumes\">INF</span>"),
+            "{index}"
+        );
+        assert!(
+            index.contains("href=\"#section-engine\""),
+            "contents: {index}"
+        );
+    }
+
+    #[test]
+    fn the_log_index_marks_corrections_and_lists_what_is_open() {
+        let log = built();
+        let out = render_index(&log, None, Some("https://example.com/p/"));
+        assert!(
+            out.contains("| [E1](worklog/0001-e1.md) - *corrected by [2](worklog/0002-e2.md)* |"),
+            "{out}"
+        );
+        assert!(out.contains("1 entry still has open questions"));
+        assert!(out.contains("Read it as a site at <https://example.com/p/>."));
+        assert!(
+            out.contains("## Still open\n\n- [1. E1](worklog/0001-e1.md) - whether it holds.\n"),
+            "{out}"
+        );
+        assert!(!render_index(&log, None, None).contains("Read it as a site"));
     }
 }

@@ -169,6 +169,14 @@ pub struct Project {
     /// files in it, and on a site they have to point somewhere real.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    /// The code's license, as an SPDX expression: `MIT OR Apache-2.0`. Found
+    /// in the repository when not given - see `docs/spec/config.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// The license of the log and the reference - the text, which is often
+    /// licensed apart from the code: `CC-BY-4.0`. The code's when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_license: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +268,84 @@ pub struct Docs {
     /// "Entries", but it is the project's word to choose.
     #[serde(default = "docs_label")]
     pub label: String,
+    /// The sections, in the order the index gives them, each named and
+    /// introduced: `[[docs.section]]`. A tree's folders are its sections
+    /// either way; declaring them gives them titles and an order, and makes a
+    /// folder nobody declared a problem `check` reports.
+    #[serde(default, rename = "section", skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<DocSection>,
+    /// Front matter a project's pages carry beyond the built-in keys, and
+    /// what `check` holds them to: `[[docs.field]]`.
+    #[serde(default, rename = "field", skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<DocField>,
+}
+
+/// A folder of reference pages, as the index presents it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocSection {
+    /// The folder under the docs root: `formats`.
+    pub dir: String,
+    /// What the index calls it; the folder's name, capitalised, when not given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// One sentence under its heading.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub about: String,
+}
+
+/// A front matter key on reference pages: `volumes: INF, MUT`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocField {
+    pub name: String,
+    /// Its column heading in the index; the name, capitalised, when not given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// What it may say. When given, the value is a comma-separated list and
+    /// every item must be one of these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+    /// Every page must have it. Applies to the built-in keys too - `status`,
+    /// `worklog`, `covers` - which is how a project insists on them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    /// Shown in the index - as a column of the generated `README.md`, and on
+    /// the site beside the status. Off for a field that is only checked.
+    #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
+    pub column: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl DocField {
+    pub fn label(&self) -> String {
+        if !self.label.is_empty() {
+            return self.label.clone();
+        }
+        capitalised(&self.name)
+    }
+}
+
+impl DocSection {
+    pub fn title(&self) -> String {
+        if !self.title.is_empty() {
+            return self.title.clone();
+        }
+        capitalised(self.dir.rsplit('/').next().unwrap_or(&self.dir))
+    }
+}
+
+/// `volumes` as `Volumes`, `file-formats` as `File formats`.
+pub fn capitalised(name: &str) -> String {
+    let words = name.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn docs_label() -> String {

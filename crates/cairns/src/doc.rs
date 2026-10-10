@@ -22,17 +22,303 @@ fn docs_dir(config: &Config) -> Result<&str> {
         })
 }
 
-/// Write a new page and print its path.
-pub fn new(
+/// The index pages under the docs root that carry the marker, each as it is
+/// on disk and as it should be: `(path, found, wanted)`.
+pub fn indexes(root: &Path, log: &cairns_core::Log) -> Vec<(String, String, String)> {
+    log.docs
+        .iter()
+        .filter(|doc| doc.is_index)
+        .filter_map(|doc| {
+            let found = std::fs::read_to_string(root.join(&doc.path)).ok()?;
+            let wanted = cairns_site::reference::regenerate(log, doc, &found)?;
+            Some((doc.path.clone(), found, wanted))
+        })
+        .collect()
+}
+
+/// Why an index page is stale, in terms of its pages: rows keyed by the page
+/// they link, so a page whose status changed is one change.
+pub fn stale_because(found: &str, wanted: &str) -> String {
+    let rows = |text: &str| -> std::collections::BTreeMap<String, String> {
+        let listing = text
+            .find(cairns_site::reference::MARKER)
+            .map(|at| &text[at..])
+            .unwrap_or("");
+        listing
+            .lines()
+            .filter(|line| line.starts_with("| ["))
+            .filter_map(|row| {
+                let link = row.split("](").nth(1)?.split(')').next()?;
+                Some((link.to_string(), row.to_string()))
+            })
+            .collect()
+    };
+    let (have, want) = (rows(found), rows(wanted));
+    let added = want.keys().filter(|page| !have.contains_key(*page)).count();
+    let gone = have.keys().filter(|page| !want.contains_key(*page)).count();
+    let changed = want
+        .iter()
+        .filter(|(page, row)| have.get(*page).is_some_and(|old| old != *row))
+        .count();
+    let pages = |n: usize| {
+        if n == 1 {
+            "1 page".to_string()
+        } else {
+            format!("{n} pages")
+        }
+    };
+    let mut why = Vec::new();
+    if added > 0 {
+        why.push(format!("{} not listed yet", pages(added)));
+    }
+    if changed > 0 {
+        why.push(format!("{} not as it lists them", pages(changed)));
+    }
+    if gone > 0 {
+        why.push(format!("{} listed that are gone", pages(gone)));
+    }
+    if why.is_empty() {
+        return "its listing differs from the one this version writes".into();
+    }
+    why.join(", ")
+}
+
+/// Regenerate every index page that carries the marker, and - when `create`
+/// - write the docs root's `README.md` if it has none. The paths written.
+pub fn write_indexes(
     root: &Path,
     config: &Config,
-    title: &str,
-    section: Option<&str>,
-    status: Option<&str>,
-    from: &[u32],
-    body: Option<String>,
-) -> Result<()> {
+    log: &cairns_core::Log,
+    create: bool,
+) -> Result<Vec<String>> {
+    let mut written = Vec::new();
+    for (path, found, wanted) in indexes(root, log) {
+        if found != wanted {
+            std::fs::write(root.join(&path), wanted)?;
+            written.push(path);
+        }
+    }
+    if create
+        && let Some(docs) = &config.docs
+        && !log
+            .docs
+            .iter()
+            .any(|doc| doc.is_index && doc.slug.is_empty())
+    {
+        let dir = docs.dir.trim_matches('/');
+        let path = format!("{dir}/README.md");
+        std::fs::create_dir_all(root.join(dir))?;
+        std::fs::write(root.join(&path), cairns_site::reference::fresh(log, dir))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+/// What `check` holds the reference to, beyond the evidence existing: the
+/// fields the project declared, a status that is one of the three, folders the
+/// project declared, and links that lead somewhere.
+pub fn problems(root: &Path, config: &Config, docs: &[Doc]) -> Vec<String> {
+    let Some(settings) = &config.docs else {
+        return Vec::new();
+    };
+    let dir = settings.dir.trim_matches('/');
+    let mut problems = Vec::new();
+    let mut undeclared: Vec<String> = Vec::new();
+    for doc in docs {
+        if let Some(status) = doc.extra.get("status") {
+            problems.push(format!(
+                "{}: status {status:?} is not one of solid, partial, guess",
+                doc.path
+            ));
+        }
+        let section = doc.section(dir);
+        if !doc.is_index()
+            && !settings.sections.is_empty()
+            && !section.is_empty()
+            && !settings.sections.iter().any(|declared| {
+                let declared = declared.dir.trim_matches('/');
+                section == declared || section.starts_with(&format!("{declared}/"))
+            })
+        {
+            let top = section.split('/').next().unwrap_or(&section).to_string();
+            if !undeclared.contains(&top) {
+                problems.push(format!(
+                    "{}: is in {dir}/{top}/, which is not a [[docs.section]] in cairns.toml - \
+                     declare it, so the index gives it a title and a place",
+                    doc.path
+                ));
+                undeclared.push(top);
+            }
+        }
+        for field in &settings.fields {
+            if doc.is_index() {
+                break;
+            }
+            let value = match field.name.as_str() {
+                "title" => Some(doc.title.clone()),
+                // One that is there but not a status was reported above.
+                "status" => doc
+                    .status
+                    .map(|status| status.name().to_string())
+                    .or_else(|| doc.extra.get("status").cloned()),
+                "worklog" => (!doc.worklog.is_empty() || !doc.elsewhere.is_empty())
+                    .then(|| "cited".to_string()),
+                "covers" => (!doc.covers.is_empty()).then(|| "covered".to_string()),
+                name => doc
+                    .extra
+                    .get(name)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
+            };
+            let Some(value) = value else {
+                if field.required {
+                    problems.push(format!("{}: has no `{}`", doc.path, field.name));
+                }
+                continue;
+            };
+            if field.values.is_empty()
+                || matches!(
+                    field.name.as_str(),
+                    "title" | "status" | "worklog" | "covers"
+                )
+            {
+                continue;
+            }
+            for item in value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+            {
+                if !field.values.iter().any(|allowed| allowed == item) {
+                    problems.push(format!(
+                        "{}: {} has {item:?}, which is not one of {}",
+                        doc.path,
+                        field.name,
+                        field.values.join(", ")
+                    ));
+                }
+            }
+        }
+        // A dead link in a reference page sends the reader looking for a page
+        // that was renamed or never written. Only pages: an entry is never
+        // edited, so a link in one that has since gone stale stays as written.
+        let from = doc.path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+        for target in cairns_site::html::link_targets(&doc.body) {
+            let Some(path) = local_target(from, &target) else {
+                continue;
+            };
+            if !root.join(&path).exists() {
+                problems.push(format!(
+                    "{}: links to {target}, which does not exist",
+                    doc.path
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// A link's target as a path from the repository root, when it is a file in
+/// the repository at all: not a URL, an anchor, or a path from the site root.
+fn local_target(from: &str, target: &str) -> Option<String> {
+    let outside = target.is_empty()
+        || target.starts_with('#')
+        || target.starts_with('/')
+        || target.contains("://")
+        || target.starts_with("mailto:")
+        || target.starts_with("cairns:");
+    if outside {
+        return None;
+    }
+    let path = target
+        .split(['#', '?'])
+        .next()
+        .unwrap_or("")
+        .replace("%20", " ");
+    if path.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = from.split('/').filter(|part| !part.is_empty()).collect();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                // Above the repository is not somewhere a page can link to.
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Write a new page and print its path.
+/// What `cairns doc new` was given.
+pub struct NewPage<'a> {
+    pub title: &'a str,
+    /// The section, a folder under the docs root.
+    pub section: Option<&'a str>,
+    pub status: Option<&'a str>,
+    /// The entries that established it.
+    pub from: &'a [u32],
+    /// Other front matter, `key=value` each.
+    pub set: &'a [String],
+    pub body: Option<String>,
+}
+
+pub fn new(root: &Path, config: &Config, page: NewPage<'_>) -> Result<()> {
+    let NewPage {
+        title,
+        section,
+        status,
+        from,
+        set,
+        body,
+    } = page;
     let dir = docs_dir(config)?;
+    // The project's own front matter, `key=value` each - written as given and
+    // held to `cairns.toml` by `check`, but a value it does not allow is
+    // refused here, before there is a page with it in.
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for pair in set {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(format!("--set {pair:?} is not key=value").into());
+        };
+        let (key, value) = (key.trim(), value.trim());
+        if matches!(key, "title" | "status" | "worklog") {
+            return Err(format!("`{key}` has its own option").into());
+        }
+        if key.is_empty()
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            return Err(
+                format!("`{key}` is not a front matter key - lower-case, no spaces").into(),
+            );
+        }
+        if let Some(field) = config
+            .docs
+            .as_ref()
+            .and_then(|docs| docs.fields.iter().find(|field| field.name == key))
+            && !field.values.is_empty()
+        {
+            for item in value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+            {
+                if !field.values.iter().any(|allowed| allowed == item) {
+                    return Err(format!(
+                        "{key} cannot be {item:?} - it is one of {}",
+                        field.values.join(", ")
+                    )
+                    .into());
+                }
+            }
+        }
+        fields.push((key.to_string(), value.to_string()));
+    }
     let title = title.trim();
     if title.is_empty() {
         return Err("a page needs a title".into());
@@ -67,6 +353,9 @@ pub fn new(
     }
     if !from.is_empty() {
         front.push_str(&format!("worklog: {}\n", numbers(from)));
+    }
+    for (key, value) in &fields {
+        front.push_str(&format!("{key}: {value}\n"));
     }
     front.push_str("---\n\n");
 
@@ -416,6 +705,96 @@ fn numbers(values: &[u32]) -> String {
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::{local_target, problems};
+
+    #[test]
+    fn check_holds_pages_to_what_the_project_declared() {
+        let config = cairns_core::Config::parse(
+            "spec_version = 1\n[project]\nname = \"P\"\nslug = \"p\"\n[site]\nbase_url = \"\"\n\
+             [docs]\ndir = \"docs\"\n[[docs.section]]\ndir = \"formats\"\n\
+             [[docs.field]]\nname = \"status\"\nrequired = true\n\
+             [[docs.field]]\nname = \"volumes\"\nvalues = [\"INF\", \"all\"]\nrequired = true\n\
+             [[area]]\nname = \"spec\"\n",
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!("cairns-doc-problems-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("docs/formats")).unwrap();
+        std::fs::write(root.join("docs/formats/there.md"), "").unwrap();
+        let doc = |path: &str, front: &str, body: &str| {
+            cairns_core::Doc::parse(&cairns_core::RawEntry {
+                path: path.into(),
+                bytes: format!("---\ntitle: T\n{front}---\n\n# T\n\n{body}\n").into_bytes(),
+            })
+            .unwrap()
+        };
+        let docs = [
+            doc(
+                "docs/formats/good.md",
+                "status: solid\nvolumes: INF, all\n",
+                "[ok](there.md) `[no](code.md)`",
+            ),
+            doc(
+                "docs/formats/bad.md",
+                "status: solidish\nvolumes: PS3\n",
+                "[gone](gone.md#x) [web](https://x.example/y.md)",
+            ),
+            doc("docs/formats/bare.md", "", ""),
+            doc("docs/extras/x.md", "status: guess\nvolumes: all\n", ""),
+        ];
+        let found = problems(&root, &config, &docs);
+        let _ = std::fs::remove_dir_all(&root);
+        let has = |text: &str| found.iter().any(|problem| problem.contains(text));
+        assert!(
+            !found.iter().any(|p| p.starts_with("docs/formats/good.md")),
+            "{found:#?}"
+        );
+        assert!(
+            has("bad.md: status \"solidish\" is not one of"),
+            "{found:#?}"
+        );
+        assert!(
+            !has("bad.md: has no `status`"),
+            "reported twice: {found:#?}"
+        );
+        assert!(has("bad.md: volumes has \"PS3\""), "{found:#?}");
+        assert!(
+            has("bad.md: links to gone.md#x, which does not exist"),
+            "{found:#?}"
+        );
+        assert!(!has("x.example"), "{found:#?}");
+        assert!(
+            has("bare.md: has no `status`") && has("bare.md: has no `volumes`"),
+            "{found:#?}"
+        );
+        assert!(
+            has("x.md: is in docs/extras/, which is not a [[docs.section]]"),
+            "{found:#?}"
+        );
+    }
+
+    #[test]
+    fn a_link_is_found_from_the_page_it_is_in() {
+        assert_eq!(
+            local_target("docs/formats", "ccs.md#layout").as_deref(),
+            Some("docs/formats/ccs.md")
+        );
+        assert_eq!(
+            local_target("docs/formats", "../../WORKLOG.md").as_deref(),
+            Some("WORKLOG.md")
+        );
+        assert_eq!(
+            local_target("docs", "./a%20b.md").as_deref(),
+            Some("docs/a b.md")
+        );
+        assert_eq!(local_target("docs", "https://example.com/x.md"), None);
+        assert_eq!(local_target("docs", "#here"), None);
+        assert_eq!(local_target("docs", "../../outside.md"), None);
+    }
 }
 
 #[cfg(test)]

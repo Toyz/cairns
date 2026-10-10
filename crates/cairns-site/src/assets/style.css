@@ -1226,3 +1226,48 @@ mark { background: var(--mark); color: inherit; padding: 0 0.1em; }
   nav.pager { flex-direction: column; gap: var(--space-2); }
   nav.pager .next { text-align: left; }
 }
+
+/* A reference page's evidence, said in full, and where the page is kept ---- */
+
+.doc-evidence {
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+}
+article .doc-evidence h2 {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.doc-evidence ul { list-style: none; margin: 0; padding: 0; }
+.doc-evidence li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.doc-evidence li:last-child { border-bottom: 0; }
+.doc-evidence li > a { color: var(--ink); text-decoration: none; }
+.doc-evidence li > a:hover { color: var(--accent); }
+.doc-evidence .n { color: var(--ink-faint); font-variant-numeric: tabular-nums; margin-right: 0.15rem; }
+.doc-evidence .when { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.doc-evidence .corrected { color: var(--accent); }
+.doc-evidence .backs { flex-basis: 100%; color: var(--ink-faint); }
+.doc-evidence .backs::before { content: "for "; }
+.doc-evidence .backs a { color: var(--ink-soft); }
+.doc-evidence .elsewhere { margin: var(--space-2) 0 0; color: var(--ink-faint); font-family: inherit; }
+.doc-source {
+  margin: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+}
+.doc-source a { color: var(--ink-faint); text-decoration: none; }
+.doc-source a:hover { color: var(--accent); }

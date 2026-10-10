@@ -1,7 +1,7 @@
 ---
 title: cairns.toml
 status: solid
-worklog: 1
+worklog: 1, 36, 37, 38, 39
 spec_version: 1
 ---
 
@@ -53,6 +53,45 @@ many projects at once without collision. Deciding this on day one costs a line
 of config; retrofitting it invalidates every URL already handed out.
 
 `name` and `description` are display text and may be changed freely.
+
+`license` is the code's license, an SPDX expression - `MIT OR Apache-2.0`.
+`text_license` is the license of the log and the reference, which is often not
+the code's - `CC-BY-4.0` - and is the code's when not given. The site shows
+both in its footer ("Text CC-BY-4.0 · Code MIT", or "Text and code MIT"),
+linking each to the repository's own license file or the license's page, with
+`<link rel="license">` on every page and `<rights>` in the feed.
+
+When `license` is not given it is found where it is certain: a manifest's own
+declaration (`Cargo.toml`, `package.json`, `pyproject.toml`), or license files
+at the root whose text is unmistakably one license - `LICENSE-MIT` and
+`LICENSE-APACHE` side by side are read as a choice between them. Nothing is
+guessed from a partial match: a wrong license on every page is worse than none.
+
+When `text_license` is not given it is found where a file says the text has a
+license of its own:
+
+- a license file named for the text - `LICENSE-docs`, `LICENSE.content.md`,
+  `COPYING-TEXT`;
+- a license file in the worklog's or the reference's directory -
+  `docs/LICENSE`;
+- a Creative Commons license (any `CC-BY` one, not CC0) at the root beside a
+  software license. Creative Commons advise against their licenses for code, so
+  `LICENSE` (MIT) and `LICENSE-CC-BY` are read as code and text, not as a
+  choice.
+
+Creative Commons licenses, every version and every port SPDX names, are known
+by their legal code, by the notice that names one in full ("licensed under a
+Creative Commons Attribution-ShareAlike 3.0 Unported License"), by its address
+(`creativecommons.org/licenses/by-sa/3.0/de/`) or by its short form ("CC BY
+4.0"). Before 4.0 a license could be ported to a country, and a port is a
+different license, so whatever follows an older version must be a jurisdiction
+or a word that says there is none - "CC BY 3.0 Spain", a port SPDX does not
+name, is not read as the unported license. Two different licenses among the text's files is
+a disagreement, and none is shown. `cairns build` says what it used for each
+and from where.
+
+`repository`, when not given, is worked out like `base_url` - from CI, or a
+GitHub or GitLab `origin` remote.
 
 ## `[paths]`
 
@@ -128,7 +167,12 @@ For anything a token cannot reach, use `site.stylesheet`.
 
 One optional key, `header`, replacing the generated opening prose of
 `WORKLOG.md`. Everything else in that file is derived, which is why it is never
-hand-edited.
+hand-edited: a tally of the areas and of the entries with questions still open,
+the table - each corrected entry saying which entries corrected it - and a
+`## Still open` list, newest first, of every entry with an open question and
+the question's first sentence. When `site.base_url` is set in `cairns.toml` the
+index links the published site; an address only worked out from CI is left
+out, since a fork's CI and a checkout would work out different ones.
 
 ## `[[link]]`
 
@@ -247,6 +291,55 @@ A `README.md` or `index.md` **is its directory**, not a page inside it.
 `docs/spec/README.md` is served at `/docs/spec/` and heads the section, with the
 rest of that directory listed beneath it. Listing it as a peer of the pages it
 introduces would be backwards.
+
+### Sections and fields
+
+A tree's folders are its sections whether or not they are declared. Declaring
+them gives each a title, a sentence, and a place in the order - the index,
+the rail and the generated `README.md` all follow it:
+
+```toml
+[[docs.section]]
+dir   = "formats"
+title = "File formats"
+about = "The containers and record layouts."
+```
+
+`title` defaults to the folder's own page's title, then its name capitalised.
+Once any section is declared, `check` reports a page in a folder that is not
+one - a folder nobody declared is a folder nobody meant to have.
+
+A project's pages may carry front matter of their own, and declaring it is how
+`check` holds them to it:
+
+```toml
+[[docs.field]]
+name     = "volumes"
+label    = "Volumes"                            # the column heading; the name, capitalised
+values   = ["INF", "MUT", "OUT", "QUA", "all"]  # a comma-separated list of these
+required = true
+column   = true                                 # shown in the index; the default
+```
+
+`required` applies to the built-in keys too - `status`, `worklog`, `covers` -
+which is how a project insists every page says how far it can be trusted.
+`check` also reports a `status` that is not one of the three, and a relative
+link in a page to a file that does not exist; entries are left out of that,
+since one is never edited to fix it. `cairns doc new --set volumes=INF` writes
+a field, and refuses a value `values` does not allow.
+
+### The generated index
+
+`docs/README.md` may carry an index generated from the pages' front matter.
+Everything above its `<!-- cairns:index -->` line is the project's; everything
+below it is replaced with a table per section - each page's title, status,
+declared fields and evidence. `cairns doc index` writes it (and writes a
+`README.md` with the marker if the tree has none); `cairns index`, `doc new`
+and `doc cite` keep it current, and `check` fails when it is stale. A section's
+own `README.md` may carry the marker too, and lists its own pages. A README
+without the marker is the project's, listing and all, and is left alone.
+
+The site shows only the prose above the marker, then lists the pages itself.
 
 ## `[workspace]`
 

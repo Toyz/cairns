@@ -81,9 +81,18 @@ impl Doc {
             .or_else(|| heading(body))
             .unwrap_or_else(|| slug_of(&raw.path).replace('-', " "));
 
-        let status = fields
-            .remove("status")
-            .and_then(|text| Status::parse(&text));
+        // A status that is none of the three is kept as written, among the
+        // other keys, for `check` to name - dropped, it read as no status.
+        let status = match fields.remove("status") {
+            Some(text) => match Status::parse(&text) {
+                Some(status) => Some(status),
+                None => {
+                    fields.insert("status".into(), text);
+                    None
+                }
+            },
+            None => None,
+        };
         let (worklog, elsewhere) = fields
             .remove("worklog")
             .map(|value| cited(&value))

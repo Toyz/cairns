@@ -32,12 +32,25 @@ pub fn atom(log: &Log) -> String {
 <link rel="alternate" href="{base}/"/>
 <link rel="alternate" type="application/json" href="{base}/log.json"/>
 <updated>{updated}</updated>
-<generator>{generator}</generator>
+<generator>{generator}</generator>{rights}
 "#,
         title = escape(&log.project.name),
         subtitle = escape(&log.project.description),
         base = escape(base),
         generator = escape(&log.generator),
+        rights = match (
+            log.project.license.as_deref(),
+            log.project.text_license.as_deref()
+        ) {
+            (Some(code), Some(text)) => format!(
+                "\n<rights>Text {}; code {}</rights>",
+                escape(text),
+                escape(code)
+            ),
+            (Some(code), None) => format!("\n<rights>{}</rights>", escape(code)),
+            (None, Some(text)) => format!("\n<rights>Text {}</rights>", escape(text)),
+            (None, None) => String::new(),
+        },
     );
 
     // Newest first: a feed reader takes the order it is given.

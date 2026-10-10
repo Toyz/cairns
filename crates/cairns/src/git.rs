@@ -62,3 +62,110 @@ fn slashed(inside: &Path) -> String {
         format!("{text}/")
     }
 }
+
+/// The day each of `paths` - relative to `root` - last changed: the newest
+/// commit whose version of the file differs from its first parent's, or today
+/// for a file changed and not yet committed. A path git has never seen is
+/// left out.
+///
+/// One walk for all of them, newest first, stopping when every path is
+/// placed. A commit that left `within` alone - the reference's directory - is
+/// passed over without looking at the files in it, which is most commits.
+pub fn last_changed(
+    root: &Path,
+    within: &str,
+    paths: &[String],
+) -> std::collections::BTreeMap<String, String> {
+    let mut found = std::collections::BTreeMap::new();
+    let Some((repo, inside)) = open(root) else {
+        return found;
+    };
+    let prefix = slashed(&inside);
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let Ok(head) = repo.head_commit() else {
+        return found;
+    };
+    let Ok(head_tree) = head.tree() else {
+        return found;
+    };
+
+    // Changed and not committed: the working copy is not what HEAD has.
+    let mut waiting: Vec<&String> = Vec::new();
+    for path in paths {
+        let full = format!("{prefix}{path}");
+        let committed = head_tree
+            .lookup_entry_by_path(&full)
+            .ok()
+            .flatten()
+            .and_then(|entry| entry.object().ok())
+            .map(|object| object.data.clone());
+        let on_disk = std::fs::read(root.join(path)).ok();
+        match committed {
+            Some(committed) if Some(&committed) == on_disk.as_ref() => waiting.push(path),
+            _ => {
+                found.insert(path.clone(), today.clone());
+            }
+        }
+    }
+    if waiting.is_empty() {
+        return found;
+    }
+
+    let id_at = |tree: &gix::Tree<'_>, path: &str| {
+        tree.lookup_entry_by_path(path)
+            .ok()
+            .flatten()
+            .map(|entry| entry.object_id())
+    };
+    let within = format!("{prefix}{}", within.trim_matches('/'));
+    let Ok(walk) = repo
+        .rev_walk([head.id])
+        .sorting(gix::revision::walk::Sorting::ByCommitTime(
+            Default::default(),
+        ))
+        .all()
+    else {
+        return found;
+    };
+    for info in walk {
+        if waiting.is_empty() {
+            break;
+        }
+        let Ok(info) = info else { break };
+        let Ok(commit) = info.object() else { continue };
+        let Ok(tree) = commit.tree() else { continue };
+        let parent = info
+            .parent_ids()
+            .next()
+            .and_then(|id| id.object().ok())
+            .and_then(|object| object.try_into_commit().ok())
+            .and_then(|parent| parent.tree().ok());
+        if let Some(parent) = &parent
+            && id_at(&tree, &within) == id_at(parent, &within)
+        {
+            continue;
+        }
+        let Ok(time) = commit.time() else { continue };
+        let day = jiff::Timestamp::from_second(time.seconds)
+            .ok()
+            .zip(jiff::tz::Offset::from_seconds(time.offset).ok())
+            .map(|(at, offset)| {
+                at.to_zoned(jiff::tz::TimeZone::fixed(offset))
+                    .strftime("%Y-%m-%d")
+                    .to_string()
+            });
+        let Some(day) = day else { continue };
+        waiting.retain(|path| {
+            let full = format!("{prefix}{path}");
+            let here = id_at(&tree, &full);
+            let before = parent.as_ref().and_then(|parent| id_at(parent, &full));
+            if here.is_some() && here != before {
+                found.insert((*path).clone(), day.clone());
+                false
+            } else {
+                true
+            }
+        });
+    }
+    found
+}

@@ -30,7 +30,9 @@ still a worklog. This is why there is no database in the design and why the
 entries are readable without any of this.
 
 **Generated files are never hand-edited.** `WORKLOG.md` is regenerated from the
-entries; editing it is a bug that `cairns check` reports.
+entries, and the reference's index from its pages' front matter, below a marker
+that keeps the project's own prose above it; editing either is a bug that
+`cairns check` reports.
 
 **Append-only in spirit.** Entries are not renumbered, rewritten or deleted. A
 claim that turns out to be wrong is corrected by a later entry that says so and

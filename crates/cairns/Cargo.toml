@@ -19,6 +19,7 @@ path = "src/main.rs"
 cairns-core = { workspace = true }
 cairns-site = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
+toml = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 jiff = "0.2"
 # Git, read in-process: the tracked files and a file at a revision. No `git`

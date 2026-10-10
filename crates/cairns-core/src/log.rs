@@ -33,6 +33,12 @@ pub struct Log {
     /// What the site calls them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs_label: Option<String>,
+    /// The reference's sections as `cairns.toml` declares them, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docs_sections: Vec<crate::config::DocSection>,
+    /// The front matter the project's pages carry beyond the built-in keys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docs_fields: Vec<crate::config::DocField>,
     /// The project's own links, for the rail.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::config::Link>,
@@ -180,6 +186,11 @@ pub struct DocPage {
     pub covers: Vec<Vec<String>>,
     pub body: String,
     pub content_hash: String,
+    /// The day the page last changed, by the repository's history - a page is
+    /// edited to stay true, so when it last was is worth knowing. Found by
+    /// whoever has the repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<String>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -192,6 +203,24 @@ pub struct ProjectInfo {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    /// The code's license, an SPDX expression, declared or found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// The text's - the log's and the reference's - when it differs from the
+    /// code's. `None` means the code's license covers the text too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_license: Option<String>,
+    /// The license files in the repository, by path, with the license each
+    /// holds when its text says - what a reader is linked to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub license_files: Vec<LicenseFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LicenseFile {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -496,6 +525,7 @@ impl Log {
                     covers: doc.covers.clone(),
                     body: doc.body.clone(),
                     content_hash: doc.content_hash.clone(),
+                    changed: None,
                     extra: doc
                         .extra
                         .iter()
@@ -637,6 +667,13 @@ impl Log {
                 description: config.project.description.clone(),
                 base_url: config.site.base_url.clone(),
                 repository: config.project.repository.clone(),
+                license: config.project.license.clone(),
+                text_license: config
+                    .project
+                    .text_license
+                    .clone()
+                    .filter(|text| Some(text) != config.project.license.as_ref()),
+                license_files: Vec::new(),
             },
             areas,
             entries: built,
@@ -644,6 +681,16 @@ impl Log {
             readme: None,
             docs: pages,
             docs_label: config.docs.as_ref().map(|docs| docs.label.clone()),
+            docs_sections: config
+                .docs
+                .as_ref()
+                .map(|docs| docs.sections.clone())
+                .unwrap_or_default(),
+            docs_fields: config
+                .docs
+                .as_ref()
+                .map(|docs| docs.fields.clone())
+                .unwrap_or_default(),
             links: config.links.clone(),
             colors: config.colors.clone(),
             stylesheet: None,

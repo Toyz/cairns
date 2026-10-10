@@ -9,6 +9,7 @@ mod clock;
 mod code;
 mod doc;
 mod git;
+mod license;
 mod mcp;
 mod pages;
 mod refs;
@@ -35,6 +36,9 @@ enum DocCommand {
         /// The entries that established it.
         #[arg(long, value_delimiter = ',')]
         from: Vec<u32>,
+        /// Other front matter, `key=value`, once per key: `--set volumes=INF,MUT`.
+        #[arg(long = "set")]
+        set: Vec<String>,
         /// The page, as markdown, or `-` to read it from stdin.
         #[arg(long)]
         body: Option<String>,
@@ -57,6 +61,9 @@ enum DocCommand {
         #[arg(long)]
         strict: bool,
     },
+    /// Regenerate the reference's index pages - every README.md carrying
+    /// `<!-- cairns:index -->` - and write the root's if there is none.
+    Index,
 }
 
 #[derive(Parser)]
@@ -259,6 +266,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let docs = read_docs(&root, &config)?;
             let mut problems = log::problems(&config, &entries);
             problems.extend(log::doc_problems(&entries, &docs));
+            problems.extend(doc::problems(&root, &config, &docs));
             problems.extend(workspace::problems(&root, &config, &entries, &docs));
 
             // An icon name that is not built in renders nothing. That is the
@@ -286,8 +294,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
             // A stale index is the most common way a worklog starts lying, and
             // the cheapest to catch: render it again and compare.
-            let built = Log::build(&config, entries, None);
-            let wanted = cairns_site::render_index(&built, config.index.header.as_deref());
+            let built = Log::build_with(&config, entries, docs, None);
+            let wanted = cairns_site::render_index(
+                &built,
+                config.index.header.as_deref(),
+                published(&config),
+            );
             let index = root.join(&config.paths.index);
             let found = std::fs::read_to_string(&index).ok();
             if found.as_deref() != Some(wanted.as_str()) {
@@ -306,6 +318,22 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     problems.push(format!(
                         "{} {why} - run `cairns index`, or `cairns check --fix`",
                         config.paths.index
+                    ));
+                }
+            }
+
+            // The reference's generated index pages, the same way.
+            for (path, found, wanted) in doc::indexes(&root, &built) {
+                if found == wanted {
+                    continue;
+                }
+                if fix {
+                    std::fs::write(root.join(&path), &wanted)?;
+                    println!("regenerated {path} - its listing was stale");
+                } else {
+                    problems.push(format!(
+                        "{path} is stale: {} - run `cairns index`, or `cairns check --fix`",
+                        doc::stale_because(&found, &wanted)
                     ));
                 }
             }
@@ -370,6 +398,27 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                      cairns.toml"
                 ),
                 None => {}
+            }
+            let found = license::detect(&root, &text_dirs(&config));
+            if config.project.license.is_none() {
+                match &found.code {
+                    Some(code) => eprintln!(
+                        "license: {} - from {}; set project.license in cairns.toml to change it",
+                        code.expression, code.from
+                    ),
+                    None => eprintln!(
+                        "no license declared or found - set project.license in cairns.toml to show \
+                         one, and project.text_license if the log's text is licensed apart from the code"
+                    ),
+                }
+            }
+            if config.project.text_license.is_none()
+                && let Some(text) = &found.text
+            {
+                eprintln!(
+                    "text license: {} - from {}; set project.text_license in cairns.toml to change it",
+                    text.expression, text.from
+                );
             }
             let built = build_log(&root, &config, stamp(false))?;
             let rendered = render_site(&root, &built)?;
@@ -791,24 +840,42 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     section,
                     status,
                     from,
+                    set,
                     body,
                 } => {
                     let body = read_body(body)?;
                     doc::new(
                         &root,
                         &config,
-                        &title,
-                        section.as_deref(),
-                        status.as_deref(),
-                        &from,
-                        body,
+                        doc::NewPage {
+                            title: &title,
+                            section: section.as_deref(),
+                            status: status.as_deref(),
+                            from: &from,
+                            set: &set,
+                            body,
+                        },
                     )?;
+                    write_index(&root, &config)?;
                 }
                 DocCommand::Cite {
                     page,
                     entries,
                     section,
-                } => doc::cite(&root, &config, &page, &entries, section.as_deref())?,
+                } => {
+                    doc::cite(&root, &config, &page, &entries, section.as_deref())?;
+                    write_index(&root, &config)?;
+                }
+                DocCommand::Index => {
+                    let built = index_log(&root, &config)?;
+                    let written = doc::write_indexes(&root, &config, &built, true)?;
+                    if written.is_empty() {
+                        println!("reference index current");
+                    }
+                    for path in written {
+                        println!("-> {path}");
+                    }
+                }
                 DocCommand::List { strict } => {
                     let flagged = doc::list(&root, &config)?;
                     if strict && flagged > 0 {
@@ -941,6 +1008,11 @@ fn load_config(root: &Path) -> Result<Config, Box<dyn std::error::Error>> {
 /// Fill an unset `site.base_url` with the Pages address the repository
 /// implies, noting where it came from.
 fn infer_base_url(root: &Path, config: &mut Config) {
+    // The repository too, when not given: a README's relative links and the
+    // license files are linked into it.
+    if config.project.repository.is_none() {
+        config.project.repository = pages::infer_repository(root);
+    }
     if !config.site.base_url.trim().is_empty() {
         return;
     }
@@ -971,6 +1043,16 @@ fn load() -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
 ///
 /// The readme is read here rather than in core, which owns no filesystem, and
 /// lands in `log.json` so the renderer still consumes one thing.
+/// Where the text lives, for a license of its own: the worklog's directory and
+/// the reference's.
+fn text_dirs(config: &Config) -> Vec<&str> {
+    let mut dirs = vec![config.paths.entries.as_str()];
+    if let Some(docs) = &config.docs {
+        dirs.push(docs.dir.as_str());
+    }
+    dirs
+}
+
 fn build_log(
     root: &Path,
     config: &Config,
@@ -1011,8 +1093,31 @@ fn build_log(
     built.code = code::resolve_all(root, &built);
     built.mentions = refs::scan(root, config);
     built.workspaces = workspace::load(root, config);
+    // The licenses: as declared, else as found; the files they are in, either
+    // way, for the footer to link to.
+    let found = license::detect(root, &text_dirs(config));
+    if built.project.license.is_none() {
+        built.project.license = found.code.map(|code| code.expression);
+    }
+    if built.project.text_license.is_none() {
+        built.project.text_license = found.text.map(|text| text.expression);
+    }
+    built.project.license_files = found.files;
+    if built.project.text_license.as_deref() == built.project.license.as_deref() {
+        built.project.text_license = None;
+    }
     for entry in &mut built.entries {
         entry.attachments = attachments(root, &entry.path);
+    }
+    // When each reference page last changed, from the history.
+    if let Some(docs) = &config.docs
+        && !built.docs.is_empty()
+    {
+        let paths: Vec<String> = built.docs.iter().map(|doc| doc.path.clone()).collect();
+        let changed = git::last_changed(root, &docs.dir, &paths);
+        for doc in &mut built.docs {
+            doc.changed = changed.get(&doc.path).cloned();
+        }
     }
     // A stylesheet named and missing is an error, not a warning: the site would
     // build, look wrong, and say nothing about why.
@@ -1126,14 +1231,35 @@ fn next_number(dir: &Path) -> Result<u32, Box<dyn std::error::Error>> {
     Ok(highest + 1)
 }
 
-/// Regenerate the index, returning how many entries went into it.
+/// Regenerate the index, and the reference's index pages that carry the
+/// marker, returning how many entries went into it.
 fn write_index(root: &Path, config: &Config) -> Result<usize, Box<dyn std::error::Error>> {
-    let built = Log::build(config, read_entries(root, config)?, None);
+    let built = index_log(root, config)?;
     std::fs::write(
         root.join(&config.paths.index),
-        cairns_site::render_index(&built, config.index.header.as_deref()),
+        cairns_site::render_index(&built, config.index.header.as_deref(), published(config)),
     )?;
+    doc::write_indexes(root, config, &built, false)?;
     Ok(built.entries.len())
+}
+
+/// Where the log is published, for the index to say - only when `cairns.toml`
+/// says so: an address worked out from CI or a remote can differ between a
+/// fork's CI and a checkout, and the index would be stale in one of them.
+fn published(config: &Config) -> Option<&str> {
+    let url = config.site.base_url.trim();
+    (config.site.base_url_from.is_none() && !url.is_empty()).then_some(url)
+}
+
+/// The log as the generated indexes need it: entries and pages, and nothing
+/// that needs the network or the history.
+fn index_log(root: &Path, config: &Config) -> Result<Log, Box<dyn std::error::Error>> {
+    Ok(Log::build_with(
+        config,
+        read_entries(root, config)?,
+        read_docs(root, config)?,
+        None,
+    ))
 }
 
 fn stamp(reproducible: bool) -> Option<String> {
@@ -1277,12 +1403,13 @@ fn stale_because(found: &str, wanted: &str) -> String {
     let table = |text: &str| -> Vec<String> {
         text.lines()
             .skip_while(|line| !line.starts_with("| # |"))
+            .take_while(|line| line.starts_with('|'))
             .map(str::to_string)
             .collect()
     };
     let (have, want) = (table(found), table(wanted));
     if have == want {
-        return "its header changed in cairns.toml since it was generated".into();
+        return "its header or its open questions changed since it was generated".into();
     }
     // Rows by entry number, so a renamed entry is one change, not a row gone
     // and a row added.
@@ -1833,10 +1960,80 @@ fn render_reference_skill(config: &Config, existing: Option<&str>) -> (String, b
         .as_ref()
         .map(|docs| docs.dir.as_str())
         .unwrap_or("docs");
-    let rendered = include_str!("../templates/REFERENCE.md")
+    let mut rendered = include_str!("../templates/REFERENCE.md")
         .replace("{{project}}", &config.project.name)
         .replace("{{docs}}", dir);
+    // What `cairns.toml` declares - the sections a page may go in, the front
+    // matter it must carry - said where the model writing a page will read
+    // it, generated so it cannot fall behind the config.
+    let declared = reference_conventions(config);
+    if !declared.is_empty() {
+        rendered = rendered.replacen(SKILL_MARKER, &format!("{declared}{SKILL_MARKER}"), 1);
+    }
     keep_project_section(rendered, existing)
+}
+
+/// The reference skill's part generated from `[docs]`: its sections and its
+/// fields, or nothing when it declares neither.
+fn reference_conventions(config: &Config) -> String {
+    let Some(docs) = &config.docs else {
+        return String::new();
+    };
+    if docs.sections.is_empty() && docs.fields.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## This project's conventions
+
+From `cairns.toml`; `check` holds pages to them.
+
+",
+    );
+    if !docs.sections.is_empty() {
+        out.push_str(
+            "A page goes in one of these sections - `--in` takes the folder:
+
+",
+        );
+        for section in &docs.sections {
+            out.push_str(&format!("- `{}` - {}", section.dir, section.title()));
+            if !section.about.trim().is_empty() {
+                out.push_str(&format!(": {}", section.about.trim()));
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    if !docs.fields.is_empty() {
+        out.push_str(
+            "Front matter:
+
+",
+        );
+        for field in &docs.fields {
+            let mut line = format!("- `{}`", field.name);
+            line.push_str(if field.required {
+                " - required"
+            } else {
+                " - optional"
+            });
+            if !field.values.is_empty() {
+                line.push_str(&format!(
+                    "; a comma-separated list of {}",
+                    field
+                        .values
+                        .iter()
+                        .map(|value| format!("`{value}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// A freshly rendered skill, with the hand-written half of an existing one -
@@ -2043,7 +2240,7 @@ mod tests {
         let two = "| 2 | [B](worklog/0002-b.md) | 2026-09-21 | spec |";
         assert_eq!(
             stale_because(&index("# Old", &[one, two]), &index("# New", &[one, two])),
-            "its header changed in cairns.toml since it was generated"
+            "its header or its open questions changed since it was generated"
         );
         assert_eq!(
             stale_because(&index("# Log", &[one]), &index("# Log", &[one, two])),
