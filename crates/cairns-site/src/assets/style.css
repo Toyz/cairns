@@ -842,6 +842,10 @@ article > *:last-child { margin-bottom: 0; }
 }
 .dateline time { font-variant-numeric: tabular-nums; }
 .dateline .from { color: var(--ink-faint); }
+/* A section's own evidence, under its heading: quieter than the page's. */
+.section-from { margin: -0.4rem 0 var(--space-2); padding: 0; border: 0; font-size: 0.85em; }
+.section-from .chip { padding: 0 0.5rem; }
+.chip--elsewhere { border-style: dashed; }
 /* The evidence a reference page rests on, as the entries' own numbers. */
 .dateline .evidence {
   display: inline-flex;

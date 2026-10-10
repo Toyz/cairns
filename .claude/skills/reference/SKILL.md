@@ -76,6 +76,17 @@ When an entry changes what a page says, edit the page and cite the entry:
 cairns doc cite formats/the-data-bin-archive 31
 ```
 
+Cite it **under the section it changed** when a page has several, so a reader
+of that section sees what it rests on, and the entry links to the place:
+
+```sh
+cairns doc cite formats/the-data-bin-archive 31 --section "The index table"
+```
+
+which writes `<!-- worklog: 31 -->` under that heading. Evidence from another
+worklog the project names under `[workspace]` is `name:12` - `piney:361` - in
+either place, and `[[piney:361]]` in prose.
+
 ## Keeping it honest
 
 ```sh

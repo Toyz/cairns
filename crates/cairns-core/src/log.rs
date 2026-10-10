@@ -57,6 +57,56 @@ pub struct Log {
     /// comment - by entry number. Found by whoever has the repository.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mentions: BTreeMap<u32, Vec<CodeMention>>,
+    /// The other worklogs this one refers to, by name, as far as they could be
+    /// read: where they are published, and - for one that is a local project -
+    /// its entries' titles and slugs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspaces: BTreeMap<String, Workspace>,
+    /// Entries and pages by number and by path, built on first use. Every
+    /// link on every page is resolved against these; looked up by walking the
+    /// entries instead, a site's build grew with the square of its length -
+    /// 0.5s at 407 entries, 3s at 2,035.
+    #[serde(skip)]
+    lookup: std::sync::OnceLock<Lookup>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Lookup {
+    by_number: std::collections::HashMap<u32, usize>,
+    by_path: std::collections::HashMap<String, usize>,
+    by_folder: std::collections::HashMap<String, usize>,
+    doc_by_path: std::collections::HashMap<String, usize>,
+}
+
+/// Another worklog, as this one knows it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Workspace {
+    /// Where it is published, when that is known: its entries are at
+    /// `<url>/<number>/`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// Its entries, when it is a project this checkout can read - so a
+    /// reference to it carries a title and can be checked. Empty for one known
+    /// only by its URL.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub entries: BTreeMap<u32, WorkspaceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub title: String,
+    pub slug: String,
+}
+
+/// A reference page, or a section of one, that names an entry as evidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocCitation {
+    pub title: String,
+    pub slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 
 /// A line in the repository that mentions an entry.
@@ -119,6 +169,12 @@ pub struct DocPage {
     /// The entries that established this page.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worklog: Vec<u32>,
+    /// Entries in other worklogs that did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elsewhere: Vec<crate::entry::EntryRef>,
+    /// Evidence given section by section.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<crate::doc::SectionEvidence>,
     /// What the page covers, as groups of items.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub covers: Vec<Vec<String>>,
@@ -202,6 +258,10 @@ pub struct LogEntry {
     /// along a link that was only ever written forwards.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub referenced_by: Vec<u32>,
+    /// Derived: the pages, and sections of pages, that name this entry as
+    /// their evidence - each a link to the place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documented_in: Vec<DocCitation>,
     /// Derived: reference pages that name this entry as their evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documented_by: Vec<String>,
@@ -271,6 +331,52 @@ fn item_refs(questions: &[crate::entry::QuestionRef]) -> Vec<String> {
 }
 
 impl Log {
+    fn lookup(&self) -> &Lookup {
+        self.lookup.get_or_init(|| {
+            let mut lookup = Lookup::default();
+            for (at, entry) in self.entries.iter().enumerate() {
+                lookup.by_number.entry(entry.number).or_insert(at);
+                lookup.by_path.insert(entry.path.clone(), at);
+                if let Some(stem) = entry.path.strip_suffix(".md") {
+                    lookup.by_folder.insert(stem.to_string(), at);
+                }
+            }
+            for (at, doc) in self.docs.iter().enumerate() {
+                lookup.doc_by_path.insert(doc.path.clone(), at);
+            }
+            lookup
+        })
+    }
+
+    /// The entry with this number.
+    pub fn entry(&self, number: u32) -> Option<&LogEntry> {
+        self.lookup()
+            .by_number
+            .get(&number)
+            .map(|at| &self.entries[*at])
+    }
+
+    /// The entry in this file, by its path from the repository root.
+    pub fn entry_at(&self, path: &str) -> Option<&LogEntry> {
+        self.lookup().by_path.get(path).map(|at| &self.entries[*at])
+    }
+
+    /// The entry whose attachments' folder this is: `worklog/0050-x`.
+    pub fn entry_with_folder(&self, folder: &str) -> Option<&LogEntry> {
+        self.lookup()
+            .by_folder
+            .get(folder)
+            .map(|at| &self.entries[*at])
+    }
+
+    /// The reference page in this file.
+    pub fn doc_at(&self, path: &str) -> Option<&DocPage> {
+        self.lookup()
+            .doc_by_path
+            .get(path)
+            .map(|at| &self.docs[*at])
+    }
+
     /// Build the canonical document. `entries` may arrive in any order.
     pub fn build(config: &Config, entries: Vec<Entry>, generated: Option<String>) -> Log {
         Log::build_with(config, entries, Vec::new(), generated)
@@ -291,6 +397,9 @@ impl Log {
         let mut linked: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for entry in &entries {
             for reference in crate::entry::references(&entry.body) {
+                if reference.workspace.is_some() {
+                    continue;
+                }
                 let from = linked.entry(reference.number).or_default();
                 if reference.number != entry.front.number && !from.contains(&entry.front.number) {
                     from.push(entry.front.number);
@@ -332,12 +441,35 @@ impl Log {
         // A page names the entries it rests on; an entry learns which pages
         // rest on it by inverting that.
         let mut cited: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+        let mut citations: BTreeMap<u32, Vec<DocCitation>> = BTreeMap::new();
         let pages: Vec<DocPage> = docs
             .iter()
             .map(|doc| {
                 let slug = doc.slug(docs_root);
                 for number in &doc.worklog {
                     cited.entry(*number).or_default().push(doc.title.clone());
+                    citations.entry(*number).or_default().push(DocCitation {
+                        title: doc.title.clone(),
+                        slug: slug.clone(),
+                        section: None,
+                        anchor: None,
+                    });
+                }
+                // A section's evidence is evidence for the page too, and the
+                // entry it names links to the section itself.
+                for section in &doc.sections {
+                    for number in &section.worklog {
+                        let titles = cited.entry(*number).or_default();
+                        if !titles.contains(&doc.title) {
+                            titles.push(doc.title.clone());
+                        }
+                        citations.entry(*number).or_default().push(DocCitation {
+                            title: doc.title.clone(),
+                            slug: slug.clone(),
+                            section: Some(section.heading.clone()),
+                            anchor: Some(section.anchor.clone()),
+                        });
+                    }
                 }
                 DocPage {
                     url: format!("{base}/docs/{slug}"),
@@ -348,6 +480,8 @@ impl Log {
                     is_index: doc.is_index(),
                     status: doc.status,
                     worklog: doc.worklog.clone(),
+                    elsewhere: doc.elsewhere.clone(),
+                    sections: doc.sections.clone(),
                     covers: doc.covers.clone(),
                     body: doc.body.clone(),
                     content_hash: doc.content_hash.clone(),
@@ -450,6 +584,10 @@ impl Log {
                 carried_to,
                 questions,
                 documented_by: cited.get(&entry.front.number).cloned().unwrap_or_default(),
+                documented_in: citations
+                    .get(&entry.front.number)
+                    .cloned()
+                    .unwrap_or_default(),
                 referenced_by: linked.get(&entry.front.number).cloned().unwrap_or_default(),
                 attachments: Vec::new(),
                 still_unknown,
@@ -500,6 +638,8 @@ impl Log {
             stylesheet: None,
             code: BTreeMap::new(),
             mentions: BTreeMap::new(),
+            workspaces: BTreeMap::new(),
+            lookup: std::sync::OnceLock::new(),
             paths: SourcePaths {
                 index: config.paths.index.clone(),
                 entries: config.paths.entries.trim_end_matches('/').to_string(),
@@ -523,6 +663,16 @@ pub fn doc_problems(entries: &[Entry], docs: &[crate::Doc]) -> Vec<String> {
                     "{}: cites worklog {number}, which does not exist",
                     doc.path
                 ));
+            }
+        }
+        for section in &doc.sections {
+            for number in &section.worklog {
+                if !numbers.contains(number) {
+                    problems.push(format!(
+                        "{}: cites worklog {number} under \"{}\", which does not exist",
+                        doc.path, section.heading
+                    ));
+                }
             }
         }
     }
@@ -596,7 +746,9 @@ pub fn problems(config: &Config, entries: &[Entry]) -> Vec<String> {
         // A `[[12]]` pointing at nothing is the link-rot the wiki form exists
         // to prevent, so it is checked rather than silently left as text.
         for reference in crate::entry::references(&entry.body) {
-            if !numbers.contains(&reference.number) {
+            // Another worklog's entries are checked against that worklog, by
+            // whoever can read it.
+            if reference.workspace.is_none() && !numbers.contains(&reference.number) {
                 problems.push(format!(
                     "{}: references [[{}]], which does not exist",
                     entry.path, reference.number

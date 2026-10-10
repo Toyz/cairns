@@ -39,6 +39,49 @@ pub struct Config {
     /// The site's palette, overridden by name.
     #[serde(default, skip_serializing_if = "Colors::is_empty")]
     pub colors: Colors,
+    /// Other worklogs this one refers to, by a short name: a path to another
+    /// cairns project, the URL of a published one, or both. `[[name:12]]` then
+    /// names entry 12 there.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace: BTreeMap<String, WorkspaceTarget>,
+}
+
+/// Where another worklog is: `"../other"`, `"https://..."`, or
+/// `{ path = "../other", url = "https://..." }` - the path read when it is
+/// there, on a machine with both repositories, and the URL used when it is
+/// not, in CI with only this one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WorkspaceTarget {
+    One(String),
+    Both {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+}
+
+impl WorkspaceTarget {
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            WorkspaceTarget::One(target) if !is_url(target) => Some(target),
+            WorkspaceTarget::Both { path, .. } => path.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            WorkspaceTarget::One(target) if is_url(target) => Some(target),
+            WorkspaceTarget::Both { url, .. } => url.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+fn is_url(target: &str) -> bool {
+    target.starts_with("https://") || target.starts_with("http://")
 }
 
 /// The colour tokens the site's stylesheet is written in. `[colors]` may set
@@ -350,6 +393,20 @@ impl Config {
             }
         }
         self.colors.validate()?;
+        for (name, target) in &self.workspace {
+            if target.path().is_none() && target.url().is_none() {
+                return Err(Error::Config(format!(
+                    "[workspace] {name}: give a path to the project, a URL where it is \
+                     published, or both"
+                )));
+            }
+            if !crate::entry::is_workspace_name(name) {
+                return Err(Error::Config(format!(
+                    "[workspace] {name:?}: a workspace's name is lower case letters, digits, \
+                     `-` and `_`, so it can be written in [[{name}:12]]"
+                )));
+            }
+        }
         for target in &self.targets {
             // The file is committed, so a literal here is a leaked credential
             // in the next push. Catching it now costs nothing.
@@ -465,6 +522,33 @@ mod tests {
         ))
         .unwrap_err();
         assert!(error.to_string().contains("is not a colour"), "{error}");
+    }
+
+    #[test]
+    fn a_workspace_is_a_path_a_url_or_both() {
+        let config = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[workspace]\nnear = \"../near\"\nfar = \"https://x.io/far/\"\n\
+             both = {{ path = \"../both\", url = \"https://x.io/both/\" }}\n"
+        ))
+        .unwrap();
+        let w = &config.workspace;
+        assert_eq!((w["near"].path(), w["near"].url()), (Some("../near"), None));
+        assert_eq!(
+            (w["far"].path(), w["far"].url()),
+            (None, Some("https://x.io/far/"))
+        );
+        assert_eq!(
+            (w["both"].path(), w["both"].url()),
+            (Some("../both"), Some("https://x.io/both/"))
+        );
+        let bad = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[workspace]\nBad = \"../x\"\n"
+        ));
+        assert!(bad.unwrap_err().to_string().contains("lower case"));
+        let empty = Config::parse(&format!(
+            "{PROJECT}[area]\nspec = \"\"\n[workspace]\nx = {{}}\n"
+        ));
+        assert!(empty.unwrap_err().to_string().contains("or both"));
     }
 
     #[test]

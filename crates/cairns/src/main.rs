@@ -12,6 +12,7 @@ mod git;
 mod mcp;
 mod refs;
 mod serve;
+mod workspace;
 
 use cairns_core::config::TargetKind;
 use cairns_core::{Config, Entry, FsSource, Log, Source, log};
@@ -41,9 +42,12 @@ enum DocCommand {
     Cite {
         /// The page: `formats/pod`, `formats/pod.md` or `docs/formats/pod.md`.
         page: String,
-        /// Entry numbers.
+        /// Entry numbers, or `name:12` for an entry in another worklog.
         #[arg(required = true, value_delimiter = ',')]
-        entries: Vec<u32>,
+        entries: Vec<String>,
+        /// Cite them under this heading of the page, not for the whole page.
+        #[arg(long)]
+        section: Option<String>,
     },
     /// Every page with its status and evidence, and what needs looking at.
     List {
@@ -254,6 +258,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let docs = read_docs(&root, &config)?;
             let mut problems = log::problems(&config, &entries);
             problems.extend(log::doc_problems(&entries, &docs));
+            problems.extend(workspace::problems(&root, &config, &entries, &docs));
 
             // An icon name that is not built in renders nothing. That is the
             // right behaviour at build time - a typo should not stop a site -
@@ -785,7 +790,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         body,
                     )?;
                 }
-                DocCommand::Cite { page, entries } => doc::cite(&root, &config, &page, &entries)?,
+                DocCommand::Cite {
+                    page,
+                    entries,
+                    section,
+                } => doc::cite(&root, &config, &page, &entries, section.as_deref())?,
                 DocCommand::List { strict } => {
                     let flagged = doc::list(&root, &config)?;
                     if strict && flagged > 0 {
@@ -974,6 +983,7 @@ fn build_log(
     // and the places the code mentions the log back.
     built.code = code::resolve_all(root, &built);
     built.mentions = refs::scan(root, config);
+    built.workspaces = workspace::load(root, config);
     for entry in &mut built.entries {
         entry.attachments = attachments(root, &entry.path);
     }
@@ -1505,7 +1515,7 @@ fn renumber(
     for entry in entries.iter().filter(|e| e.path != moving.path) {
         if cairns_core::entry::references(&entry.body)
             .iter()
-            .any(|r| r.number == old)
+            .any(|r| r.workspace.is_none() && r.number == old)
         {
             mentions.push(format!("{}: references [[{old}]]", entry.path));
         }

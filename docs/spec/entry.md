@@ -231,6 +231,9 @@ exist. Nothing to look up, nothing to mistype, and no breakage when a slug
 changes - which the older form, a markdown link to the entry's filename, could
 not promise.
 
+An entry in another worklog the project names under `[workspace]` is
+`[[name:12]]` - see [config.md](config.md).
+
 The older form still works and still renders on GitHub, where `[[12]]` is
 literal text. That is the trade: a reference reads better and cannot rot; a
 file link survives outside this tool.

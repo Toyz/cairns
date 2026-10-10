@@ -144,7 +144,7 @@ impl Links<'_> {
         // a written-out link reach the same place by the same code.
         if let Some(number) = url.strip_prefix("cairns:")
             && let Ok(number) = number.trim().parse::<u32>()
-            && let Some(entry) = self.log.entries.iter().find(|entry| entry.number == number)
+            && let Some(entry) = self.log.entry(number)
         {
             return self.site(&format!("{}-{}/", entry.number, entry.slug));
         }
@@ -161,27 +161,28 @@ impl Links<'_> {
 
         // A file kept with an entry, in the folder named like it, is served
         // beside the entry's page.
-        for entry in &self.log.entries {
-            let Some(stem) = entry.path.strip_suffix(".md") else {
-                continue;
-            };
-            if let Some(name) = target.strip_prefix(&format!("{stem}/"))
-                && entry.attachments.iter().any(|a| a == name)
-            {
-                return format!(
-                    "{}{fragment}",
-                    self.site(&format!("{}-{}/{name}", entry.number, entry.slug))
-                );
-            }
+        // The folder is the target's leading `worklog/0050-x`, found directly
+        // rather than by trying every entry.
+        if let Some((folder, name)) = target
+            .match_indices('/')
+            .map(|(at, _)| (&target[..at], &target[at + 1..]))
+            .find(|(folder, _)| self.log.entry_with_folder(folder).is_some())
+            && let Some(entry) = self.log.entry_with_folder(folder)
+            && entry.attachments.iter().any(|a| a == name)
+        {
+            return format!(
+                "{}{fragment}",
+                self.site(&format!("{}-{}/{name}", entry.number, entry.slug))
+            );
         }
 
-        if let Some(entry) = self.log.entries.iter().find(|entry| entry.path == target) {
+        if let Some(entry) = self.log.entry_at(&target) {
             return format!(
                 "{}{fragment}",
                 self.site(&format!("{}-{}/", entry.number, entry.slug))
             );
         }
-        if let Some(doc) = self.log.docs.iter().find(|doc| doc.path == target) {
+        if let Some(doc) = self.log.doc_at(&target) {
             return format!("{}{fragment}", self.site(&format!("docs/{}/", doc.slug)));
         }
 
@@ -259,11 +260,22 @@ fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, Strin
     // that scheme into the entry's URL - so references and written-out links
     // take exactly the same path through the renderer.
     let text = cairns_core::entry::rewrite_references(&text, &|reference| {
+        // An entry in another worklog links there, with its title when that
+        // worklog could be read, and by number when it is known only by URL.
+        if let Some(name) = &reference.workspace {
+            return Some(match elsewhere_link(links.log, name, reference.number) {
+                Some((url, title)) => format!("<{url}> \"{}\"", title.replace('"', "'")),
+                // Known, but with nowhere to link: shown as text, not as the
+                // brackets it was written in.
+                None => format!(
+                    "cairns-text: \"{}\"",
+                    elsewhere_title(links.log, name, reference.number).replace('"', "'")
+                ),
+            });
+        }
         links
             .log
-            .entries
-            .iter()
-            .find(|entry| entry.number == reference.number)
+            .entry(reference.number)
             // The title rides along as the link's title attribute, so a bare
             // number in prose still says what it points at on hover.
             .map(|entry| {
@@ -275,19 +287,38 @@ fn markdown_with_headings(text: &str, links: &Links<'_>) -> (Vec<Heading>, Strin
             })
     });
 
+    // A link to `cairns-text:` is a reference with nowhere to go: it becomes a
+    // span with its title, and its closing tag follows it.
+    let mut spans = Vec::new();
     let mut events: Vec<Event> = Parser::new_ext(&text, options())
         .map(|event| match event {
+            Event::Start(Tag::Link {
+                dest_url, title, ..
+            }) if dest_url.starts_with("cairns-text:") => {
+                spans.push(true);
+                Event::Html(
+                    format!(
+                        "<span class=\"ref-elsewhere\" title=\"{}\">",
+                        escape(&title)
+                    )
+                    .into(),
+                )
+            }
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
                 title,
                 id,
-            }) => Event::Start(Tag::Link {
-                link_type,
-                dest_url: links.resolve(&dest_url).into(),
-                title,
-                id,
-            }),
+            }) => {
+                spans.push(false);
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url: links.resolve(&dest_url).into(),
+                    title,
+                    id,
+                })
+            }
+            Event::End(TagEnd::Link) if spans.pop() == Some(true) => Event::Html("</span>".into()),
             Event::Start(Tag::Image {
                 link_type,
                 dest_url,
@@ -541,7 +572,7 @@ fn shell(
 {mine}{aside}</aside>
 <main>
 {body}
-<footer><p>Generated by <a href="https://github.com/Toyz/cairns">cairns</a>.</p></footer>
+<footer><p>Generated by {generator}.</p></footer>
 </main>
 <aside class="contents-rail">{contents}</aside>
 </div>
@@ -556,6 +587,7 @@ fn shell(
         base = escape(base),
         mine = mine,
         contents = contents,
+        generator = generator_html(&log.generator),
         tagline = if log.project.description.is_empty() {
             String::new()
         } else {
@@ -865,6 +897,102 @@ fn short_date(date: cairns_core::Date) -> String {
         }
         _ => long,
     }
+}
+
+/// Evidence as pills: this log's entries as `#12`, other worklogs' as
+/// `piney:361`, each linking to its entry with its title on hover.
+fn evidence_chips(
+    log: &Log,
+    here: &[u32],
+    elsewhere: &[cairns_core::entry::EntryRef],
+    rel: &str,
+    by_number: &BTreeMap<u32, &LogEntry>,
+) -> String {
+    let mut out = String::new();
+    for number in here {
+        match by_number.get(number) {
+            Some(entry) => {
+                let _ = write!(
+                    out,
+                    "<a class=\"chip\" href=\"{rel}{}-{}/\" title=\"{}\">#{number}</a>",
+                    entry.number,
+                    escape(&entry.slug),
+                    escape(&entry.title)
+                );
+            }
+            None => {
+                let _ = write!(out, "<span class=\"chip\">#{number}</span>");
+            }
+        }
+    }
+    for other in elsewhere {
+        match elsewhere_link(log, &other.workspace, other.number) {
+            Some((url, title)) => {
+                let _ = write!(
+                    out,
+                    "<a class=\"chip chip--elsewhere\" href=\"{}\" title=\"{}\">{}</a>",
+                    escape(&url),
+                    escape(&title),
+                    escape(&other.to_string())
+                );
+            }
+            None => {
+                let _ = write!(
+                    out,
+                    "<span class=\"chip chip--elsewhere\">{}</span>",
+                    escape(&other.to_string())
+                );
+            }
+        }
+    }
+    out
+}
+
+/// What to call an entry in another worklog when there is nowhere to link it.
+fn elsewhere_title(log: &Log, workspace: &str, number: u32) -> String {
+    match log
+        .workspaces
+        .get(workspace)
+        .and_then(|w| w.entries.get(&number))
+    {
+        Some(entry) => format!("{workspace} {number}: {}", entry.title),
+        None => format!("entry {number} of {workspace}"),
+    }
+}
+
+/// "cairns 0.10.1", linking to that release - so a reader, or whoever keeps
+/// the site, can tell which version made a page without opening `log.json`.
+/// A build from source says so rather than showing a version it is not.
+fn generator_html(generator: &str) -> String {
+    let version = generator.strip_prefix("cairns ").unwrap_or(generator);
+    if version.is_empty() || version.contains("dev") {
+        return "<a href=\"https://github.com/Toyz/cairns\">cairns</a> (a development build)"
+            .to_string();
+    }
+    format!(
+        "<a href=\"https://github.com/Toyz/cairns/releases/tag/v{v}\">cairns {v}</a>",
+        v = escape(version)
+    )
+}
+
+/// Where an entry in another worklog is, and what to call it on hover: its
+/// page when the worklog was read, its number's short URL when it is known
+/// only by where it is published. `None` when it is known not at all.
+fn elsewhere_link(log: &Log, workspace: &str, number: u32) -> Option<(String, String)> {
+    let found = log.workspaces.get(workspace)?;
+    if found.url.is_empty() {
+        return None;
+    }
+    Some(match found.entries.get(&number) {
+        Some(entry) => (
+            format!("{}/{number}-{}/", found.url, entry.slug),
+            format!("{workspace} {number}: {}", entry.title),
+        ),
+        None => (
+            format!("{}/{number}/", found.url),
+            format!("entry {number} of {workspace}"),
+        ),
+    })
 }
 
 /// How a code reference reads when it gives no words of its own: the file's
@@ -1202,31 +1330,30 @@ pub fn entry(log: &Log, at: usize, by_number: &BTreeMap<u32, &LogEntry>) -> Stri
             let who: Vec<String> = this.supersedes.iter().map(|n| link(*n)).collect();
             let _ = writeln!(body, "<p>This entry revisits {}.</p>", who.join(", "));
         }
-        if !this.documented_by.is_empty() {
-            let _ = writeln!(
-                body,
-                "<p>Documented in {}.</p>",
-                // The page that rests on this entry is one click away, or
-                // should be; a name alone sent the reader off to find it.
-                this.documented_by
-                    .iter()
-                    .map(
-                        |title| match log.docs.iter().find(|doc| &doc.title == title) {
-                            // The docs root's own README is the docs index.
-                            Some(doc) if doc.slug.is_empty() => {
-                                format!("<a href=\"../docs/\">{}</a>", escape(title))
-                            }
-                            Some(doc) => format!(
-                                "<a href=\"../docs/{}/\">{}</a>",
-                                escape(&doc.slug),
-                                escape(title)
-                            ),
-                            None => escape(title),
-                        }
-                    )
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+        // Each page that rests on this entry, and the section of it when the
+        // evidence was given section by section - one click to the place.
+        if !this.documented_in.is_empty() {
+            let places: Vec<String> = this
+                .documented_in
+                .iter()
+                .map(|citation| {
+                    let page = if citation.slug.is_empty() {
+                        "../docs/".to_string()
+                    } else {
+                        format!("../docs/{}/", citation.slug)
+                    };
+                    match (&citation.section, &citation.anchor) {
+                        (Some(section), Some(anchor)) => format!(
+                            "<a href=\"{page}#{}\">{} \u{203a} {}</a>",
+                            escape(anchor),
+                            escape(&citation.title),
+                            escape(section)
+                        ),
+                        _ => format!("<a href=\"{page}\">{}</a>", escape(&citation.title)),
+                    }
+                })
+                .collect();
+            let _ = writeln!(body, "<p>Documented in {}.</p>", places.join(", "));
         }
         // A single question is named the way it is written - `54.2` - and
         // links to the entry that asked it.
@@ -2388,25 +2515,17 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         );
     }
     // The evidence: the entries this page rests on, as the same pills an
-    // entry's areas are, each with its title on hover.
-    if !doc.worklog.is_empty() {
+    // entry's areas are, each with its title on hover - this log's first,
+    // then other worklogs'.
+    if !doc.worklog.is_empty() || !doc.elsewhere.is_empty() {
         body.push_str("<span class=\"from\">from</span>");
-        for number in &doc.worklog {
-            match by_number.get(number) {
-                Some(entry) => {
-                    let _ = write!(
-                        body,
-                        "<a class=\"chip\" href=\"{rel}{}-{}/\" title=\"{}\">#{number}</a>",
-                        entry.number,
-                        escape(&entry.slug),
-                        escape(&entry.title)
-                    );
-                }
-                None => {
-                    let _ = write!(body, "<span class=\"chip\">#{number}</span>");
-                }
-            }
-        }
+        body.push_str(&evidence_chips(
+            log,
+            &doc.worklog,
+            &doc.elsewhere,
+            &rel,
+            &by_number,
+        ));
     }
     body.push_str("</p>\n");
     body.push_str(&covers_html(&doc.covers));
@@ -2422,7 +2541,26 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         Some(rest) => rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(""),
         None => doc.body.as_str(),
     };
-    let (headings, html) = markdown_with_headings(stripped, &links);
+    let (headings, mut html) = markdown_with_headings(stripped, &links);
+    // A section's own evidence, under its heading: the place a reader asks
+    // "where was this found out?" is the section they are reading.
+    for section in &doc.sections {
+        let opening = format!(" id=\"{}\">", section.anchor);
+        let Some(at) = html.find(&opening) else {
+            continue;
+        };
+        let Some(close) = html[at..].find("</h").map(|c| at + c) else {
+            continue;
+        };
+        let Some(end) = html[close..].find('>').map(|e| close + e + 1) else {
+            continue;
+        };
+        let line = format!(
+            "\n<p class=\"dateline section-from\"><span class=\"from\">from</span>{}</p>",
+            evidence_chips(log, &section.worklog, &section.elsewhere, &rel, &by_number)
+        );
+        html.insert_str(end, &line);
+    }
     body.push_str(&html);
 
     if doc.is_index {
@@ -2482,6 +2620,20 @@ pub fn doc_page(log: &Log, doc: &DocPage) -> String {
         &contents_nav(&headings),
         &body,
     )
+}
+
+#[cfg(test)]
+mod footer_tests {
+    use super::generator_html;
+
+    #[test]
+    fn the_footer_names_the_version_that_made_the_page() {
+        assert_eq!(
+            generator_html("cairns 0.10.1"),
+            "<a href=\"https://github.com/Toyz/cairns/releases/tag/v0.10.1\">cairns 0.10.1</a>"
+        );
+        assert!(generator_html("cairns 0.0.0-dev").contains("development build"));
+    }
 }
 
 #[cfg(test)]

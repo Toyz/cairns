@@ -52,6 +52,11 @@ pub struct Doc {
     pub status: Option<Status>,
     /// The entries that established this page, by number.
     pub worklog: Vec<u32>,
+    /// Entries in other worklogs that did - `worklog: piney:361`.
+    pub elsewhere: Vec<crate::entry::EntryRef>,
+    /// Evidence given section by section, under each heading as
+    /// `<!-- worklog: 40, piney:12 -->`.
+    pub sections: Vec<SectionEvidence>,
     /// What the page covers in the thing it documents - the files, addresses,
     /// functions - as groups (`;`) of items (`,`).
     pub covers: Vec<Vec<String>>,
@@ -79,12 +84,14 @@ impl Doc {
         let status = fields
             .remove("status")
             .and_then(|text| Status::parse(&text));
-        let worklog = fields
+        let (worklog, elsewhere) = fields
             .remove("worklog")
             .map(|value| cited(&value))
             .transpose()
             .map_err(|problem| Error::entry(&raw.path, problem))?
             .unwrap_or_default();
+        let sections =
+            section_evidence(body).map_err(|problem| Error::entry(&raw.path, problem))?;
 
         let covers = fields
             .remove("covers")
@@ -96,6 +103,8 @@ impl Doc {
             title,
             status,
             worklog,
+            elsewhere,
+            sections,
             covers,
             body: body.trim_start_matches('\n').to_string(),
             content_hash: {
@@ -241,19 +250,96 @@ fn covered(value: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-fn cited(value: &str) -> std::result::Result<Vec<u32>, String> {
+/// One section's evidence: the heading it is under, its anchor on the page,
+/// and the entries it rests on - in this log and in others.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionEvidence {
+    pub heading: String,
+    pub anchor: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worklog: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elsewhere: Vec<crate::entry::EntryRef>,
+}
+
+/// The `<!-- worklog: ... -->` comments in a page, each belonging to the `##`
+/// or `###` heading above it. A comment, so a forge rendering the page shows
+/// nothing; the site shows it under the heading.
+pub fn section_evidence(body: &str) -> std::result::Result<Vec<SectionEvidence>, String> {
+    let mut found: Vec<SectionEvidence> = Vec::new();
+    let mut heading: Option<String> = None;
+    let mut fenced = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        if let Some(text) = trimmed
+            .strip_prefix("### ")
+            .or_else(|| trimmed.strip_prefix("## "))
+        {
+            heading = Some(text.trim().to_string());
+            continue;
+        }
+        let Some(inner) = trimmed
+            .strip_prefix("<!--")
+            .and_then(|rest| rest.strip_suffix("-->"))
+            .map(str::trim)
+            .and_then(|inner| inner.strip_prefix("worklog:"))
+        else {
+            continue;
+        };
+        let Some(heading) = &heading else {
+            return Err("a `<!-- worklog: -->` comment comes before any `##` heading - put it under the heading it is evidence for, or use `worklog:` in the front matter".into());
+        };
+        let (worklog, elsewhere) = cited(inner)?;
+        match found.iter_mut().find(|s| &s.heading == heading) {
+            Some(section) => {
+                section.worklog.extend(worklog);
+                section.elsewhere.extend(elsewhere);
+            }
+            None => found.push(SectionEvidence {
+                anchor: crate::entry::slugify(&heading.replace('`', "")),
+                heading: heading.clone(),
+                worklog,
+                elsewhere,
+            }),
+        }
+    }
+    Ok(found)
+}
+
+/// A `worklog:` list: entry numbers and ranges in this log (`12, 15-18`), and
+/// entries in others (`piney:361`).
+fn cited(value: &str) -> std::result::Result<(Vec<u32>, Vec<crate::entry::EntryRef>), String> {
     let mut numbers = Vec::new();
+    let mut elsewhere = Vec::new();
     for part in value
         .split(',')
         .map(str::trim)
         .filter(|part| !part.is_empty())
     {
+        if let Some(other) = crate::entry::parse_entry_ref(part) {
+            if !elsewhere.contains(&other) {
+                elsewhere.push(other);
+            }
+            continue;
+        }
         let range = part
             .split_once(" to ")
             .or_else(|| part.split_once('-'))
             .map(|(from, to)| (from.trim(), to.trim()));
 
-        let bad = || format!("`worklog` has {part:?} in it, which is not an entry number");
+        let bad = || {
+            format!(
+                "`worklog` has {part:?} in it, which is not an entry number, a range, or an \
+                 entry in another worklog (`name:12`)"
+            )
+        };
         match range {
             Some((from, to)) => {
                 let from: u32 = from.parse().map_err(|_| bad())?;
@@ -269,7 +355,7 @@ fn cited(value: &str) -> std::result::Result<Vec<u32>, String> {
         }
     }
     numbers.dedup();
-    Ok(numbers)
+    Ok((numbers, elsewhere))
 }
 
 #[cfg(test)]
@@ -293,6 +379,18 @@ mod tests {
     }
 
     #[test]
+    fn a_section_cites_its_own_evidence() {
+        let body = "# Page\n\n<!-- not evidence -->\n\n## Layout\n<!-- worklog: 12, 15-16 -->\n\ntext\n\n### The `index` table\n<!-- worklog: piney:40 -->\n\n```\n<!-- worklog: 99 -->\n```\n";
+        let found = super::section_evidence(body).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].heading, "Layout");
+        assert_eq!(found[0].worklog, vec![12, 15, 16]);
+        assert_eq!(found[1].anchor, "the-index-table");
+        assert_eq!(found[1].elsewhere[0].to_string(), "piney:40");
+        assert!(super::section_evidence("<!-- worklog: 3 -->\n## Late\n").is_err());
+    }
+
+    #[test]
     fn covers_is_groups_of_items() {
         assert_eq!(
             super::covered("INF a.prg:0x10 f, 0x20 g; INF b.prg:0x30 h ;; ,"),
@@ -307,11 +405,16 @@ mod tests {
 
     #[test]
     fn a_page_may_cite_numbers_or_a_range() {
-        assert_eq!(cited("3, 29, 30").unwrap(), vec![3, 29, 30]);
-        assert_eq!(cited("7 to 10").unwrap(), vec![7, 8, 9, 10]);
-        assert_eq!(cited("7-9, 12").unwrap(), vec![7, 8, 9, 12]);
-        assert_eq!(cited("5").unwrap(), vec![5]);
+        assert_eq!(cited("3, 29, 30").unwrap().0, vec![3, 29, 30]);
+        assert_eq!(cited("7 to 10").unwrap().0, vec![7, 8, 9, 10]);
+        assert_eq!(cited("7-9, 12").unwrap().0, vec![7, 8, 9, 12]);
+        assert_eq!(cited("5").unwrap().0, vec![5]);
         assert!(cited("nine").is_err());
         assert!(cited("20 to 7").unwrap_err().contains("backwards"));
+        // Another worklog's entry, beside this one's - and a name with a dash
+        // is not read as a range.
+        let (here, elsewhere) = cited("12, piney-apples:361").unwrap();
+        assert_eq!(here, vec![12]);
+        assert_eq!(elsewhere[0].to_string(), "piney-apples:361");
     }
 }

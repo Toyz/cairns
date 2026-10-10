@@ -86,6 +86,25 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
             format!("{}-{}/index.html", entry.number, entry.slug),
             html::entry(log, at, &by_number),
         );
+        // `/<number>/` sends a reader on to the entry: a URL that needs only
+        // the number, for another worklog linking here without its slug -
+        // and short enough to say aloud.
+        rendered.push(
+            format!("{}/index.html", entry.number),
+            format!(
+                // The script keeps a `#section` - `/361/#the-hold` lands on
+                // the section - which a meta refresh drops; the refresh is
+                // there for a reader with scripts off.
+                "<!doctype html>\n<meta charset=\"utf-8\">\n<title>{n}. {title}</title>\n\
+                 <link rel=\"canonical\" href=\"../{n}-{slug}/\">\n\
+                 <script>location.replace(\"../{n}-{slug}/\" + location.hash)</script>\n\
+                 <meta http-equiv=\"refresh\" content=\"0; url=../{n}-{slug}/\">\n\
+                 <p><a href=\"../{n}-{slug}/\">{n}. {title}</a></p>\n",
+                n = entry.number,
+                slug = html::escape(&entry.slug),
+                title = html::escape(&entry.title)
+            ),
+        );
     }
 
     let searchable: Vec<Searchable> = log
@@ -104,6 +123,25 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
         })
         .collect();
     rendered.push("search.json", serde_json::to_vec(&searchable)?);
+
+    // Every entry's number, slug and title - what another worklog needs to
+    // link here by number and say what it links to, at a fraction of the size
+    // of log.json. Read by a project naming this one under [workspace].
+    let ids = serde_json::json!({
+        "project": log.project.slug,
+        "url": log.project.base_url.trim_end_matches('/'),
+        "entries": log
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.number.to_string(),
+                    serde_json::json!({ "slug": entry.slug, "title": entry.title }),
+                )
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
+    });
+    rendered.push("ids.json", serde_json::to_vec(&ids)?);
 
     // The reference's own search index, beside its index page, keyed by slug.
     if !log.docs.is_empty() {
@@ -272,6 +310,10 @@ mod tests {
             "feed.xml",
             "open/index.html",
             "1-title-1/index.html",
+            // What another worklog reads to link here, and the short URL it
+            // links by when it has no slug.
+            "ids.json",
+            "1/index.html",
         ] {
             assert!(files.contains(&wanted), "{wanted} missing from {files:?}");
         }

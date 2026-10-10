@@ -105,3 +105,14 @@ token = "$CAIRNS_TOKEN"
 
 `cairns check` fails on a `token` that does not, which catches the mistake in
 the commit that introduces it rather than after the push.
+
+## Files every site carries
+
+Beside the pages, `log.json`, `search.json` and `feed.xml`:
+
+- `ids.json` - every entry's number, slug and title, and the project's slug and
+  URL. Small - 65 KB for 407 entries - and what another worklog reads to link
+  here by name with a title, and to check a reference into this one.
+- `<number>/` - a page sending a reader on to the entry, so a URL needs only the
+  number. Another worklog links by it when it knows no slug.
+

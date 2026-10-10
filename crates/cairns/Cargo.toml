@@ -24,6 +24,9 @@ jiff = "0.2"
 # Git, read in-process: the tracked files and a file at a revision. No `git`
 # binary needed, and nothing to scrape from its output.
 gix = { version = "0.89", default-features = false, features = ["revision", "index", "sha1"] }
+# Reading another worklog's ids.json, for references into it. Pure Rust, TLS
+# included - no curl to run, no OpenSSL to link.
+ureq = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

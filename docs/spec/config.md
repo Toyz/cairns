@@ -215,6 +215,18 @@ A page's own open questions go in a section headed `## Unknown` (or
 `Unknowns`, `Still unknown`, `Open questions`). The open questions page
 collects them beside the log's, under each page's name.
 
+A section can give its own evidence, in a comment under its heading - a forge
+shows nothing, the site shows "from" and the entries under the heading, and an
+entry it names links to that section rather than the page:
+
+```markdown
+## The index table
+<!-- worklog: 40, 52, piney:361 -->
+```
+
+`cairns doc cite <page> 40 --section "The index table"` writes it. Entries in
+other worklogs - `piney:361` - may be cited here and in `worklog:` alike.
+
 `worklog` is the edge that makes keeping both worthwhile. The page states what
 is true; the entries say how that was found out. It is rendered in both
 directions - a page links to its evidence, and those entries say which pages
@@ -224,6 +236,29 @@ A `README.md` or `index.md` **is its directory**, not a page inside it.
 `docs/spec/README.md` is served at `/docs/spec/` and heads the section, with the
 rest of that directory listed beneath it. Listing it as a peer of the pages it
 introduces would be backwards.
+
+## `[workspace]`
+
+Other worklogs this one refers to, by a short name - a monorepo with a log per
+crate, or sibling repositories.
+
+```toml
+[workspace]
+piney      = { path = "../piney_apples", url = "https://toyz.github.io/piney_apples/" }
+hellbender = "https://toyz.github.io/hellbender/"
+```
+
+`[[piney:361]]` then names entry 361 there, in prose or as evidence. A value is
+a path to another cairns project, the URL of a published one, or both. The path
+is read when it is there - titles, slugs, and `check` refusing an entry the
+project does not have. When it is not - in CI, with only this repository
+checked out - the URL is used: the published site's `ids.json` is fetched,
+kept for an hour in `.cairns/`, and gives the same titles and the same check.
+With no network, or a site that publishes no `ids.json`, an entry is linked by
+its number - `<url>/361/`, which every cairns site redirects - and not checked.
+A path with no URL, not there, is an error.
+
+A name is lower case letters, digits, `-` and `_`.
 
 ## `[area]`
 

@@ -131,6 +131,20 @@
     });
   });
 
+  // An entry's number, and Enter, goes to it: the number is how entries are
+  // named everywhere else, so it should be enough here too.
+  if (box) {
+    box.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      var wanted = box.value.trim().replace(/^#/, "");
+      if (!/^[0-9]+$/.test(wanted)) return;
+      var row = list.querySelector('li[data-n="' + wanted + '"] a');
+      if (!row) return;
+      event.preventDefault();
+      location.href = row.href;
+    });
+  }
+
   if (box) {
     box.addEventListener("focus", function () { load().then(apply); }, { once: true });
     box.addEventListener("input", function () { load().then(apply); });

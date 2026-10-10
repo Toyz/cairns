@@ -526,6 +526,19 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_in_another_worklog_is_name_colon_number() {
+        let found = references("As [[piney:361]] and [[12]] found, and [[src/a.rs:12]].");
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].workspace.as_deref(), Some("piney"));
+        assert_eq!(found[0].number, 361);
+        assert_eq!(found[1].workspace, None);
+        assert_eq!(code_references("[[src/a.rs:12]]").len(), 1);
+        assert!(parse_entry_ref("Piney:3").is_none() && parse_entry_ref("a:b").is_none());
+        let rewritten = rewrite_references("see [[piney:361]]", &|_| Some("x".into()));
+        assert_eq!(rewritten, "see [piney:361](x)");
+    }
+
+    #[test]
     fn a_code_reference_is_a_path_a_range_or_a_name() {
         let parse = |s: &str| CodeRef::parse(s);
         let r = parse("src/entry.rs:120-158@3fbdc65|the scanner").unwrap();
@@ -839,12 +852,51 @@ mod summary_tests {
     }
 }
 
-/// A reference to another entry, written `[[12]]` or `[[12|in other words]]`.
+/// A reference to another entry, written `[[12]]` or `[[12|in other words]]` -
+/// or `[[piney:361]]`, an entry in another worklog the project names under
+/// `[workspace]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference {
     pub number: u32,
+    /// The other worklog, when it is one.
+    pub workspace: Option<String>,
     /// The words to show, when the reference gave some.
     pub label: Option<String>,
+}
+
+/// An entry in another worklog: `piney:361`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct EntryRef {
+    pub workspace: String,
+    pub number: u32,
+}
+
+impl std::fmt::Display for EntryRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}:{}", self.workspace, self.number)
+    }
+}
+
+/// A workspace's name: lower case, digits, `-` and `_` - short enough to write
+/// in `[[name:12]]`, and never a path, which has a `/` or a `.`.
+pub fn is_workspace_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// `name:12`, or `None` when it is not one.
+pub fn parse_entry_ref(text: &str) -> Option<EntryRef> {
+    let (workspace, number) = text.trim().split_once(':')?;
+    is_workspace_name(workspace).then_some(())?;
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(EntryRef {
+        workspace: workspace.to_string(),
+        number: number.parse().ok()?,
+    })
 }
 
 /// Rewrite every `[[12]]` in a body, skipping code.
@@ -863,7 +915,10 @@ pub fn rewrite_references(body: &str, link: &dyn Fn(&Reference) -> Option<String
                 let label = reference
                     .label
                     .clone()
-                    .unwrap_or_else(|| reference.number.to_string());
+                    .unwrap_or_else(|| match &reference.workspace {
+                        Some(workspace) => format!("{workspace}:{}", reference.number),
+                        None => reference.number.to_string(),
+                    });
                 out.push_str(&format!("[{label}]({destination})"));
             }
             None => out.push_str(whole),
@@ -1033,7 +1088,25 @@ fn scan<'a>(body: &'a str, mut hand: impl FnMut(Found<'a>)) {
                 && let Ok(number) = digits.parse()
             {
                 hand(Found::Text(&line[emitted..at]));
-                hand(Found::Reference(whole, Reference { number, label }));
+                hand(Found::Reference(
+                    whole,
+                    Reference {
+                        number,
+                        workspace: None,
+                        label,
+                    },
+                ));
+                emitted = at + close + 2;
+            } else if let Some(elsewhere) = parse_entry_ref(digits) {
+                hand(Found::Text(&line[emitted..at]));
+                hand(Found::Reference(
+                    whole,
+                    Reference {
+                        number: elsewhere.number,
+                        workspace: Some(elsewhere.workspace),
+                        label,
+                    },
+                ));
                 emitted = at + close + 2;
             } else if let Some(mut code) = CodeRef::parse(inner) {
                 // `![[...]]` embeds: the `!` belongs to the reference.
@@ -1110,6 +1183,7 @@ mod reference_tests {
             references("[[12|the stylesheet disaster]]")[0],
             Reference {
                 number: 12,
+                workspace: None,
                 label: Some("the stylesheet disaster".into())
             }
         );

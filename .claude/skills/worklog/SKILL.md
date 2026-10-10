@@ -85,6 +85,7 @@ cairns open                 # every unresolved question in the log
 cairns check                # numbering sound, front matter complete, index current
 cairns ls :area and open    # the entries a query matches - has word, took gt 2h, date ge ...
 cairns refs 12              # where entry 12 is mentioned, in the log and in the code
+cairns update               # after upgrading cairns: refresh these skills and the index
 ```
 
 Read what the log already knows before starting on something: `cairns ls has
@@ -176,6 +177,9 @@ Use it freely in prose - "as [[12]] found", "this contradicts [[6]]". A log
 whose entries do not point at each other is a pile of entries.
 
 Inside code, fenced or inline, `[[...]]` is left exactly as written.
+
+An entry in another worklog named under `[workspace]` in `cairns.toml` is
+`[[name:12]]`.
 
 ## Linking an entry to an earlier one
 

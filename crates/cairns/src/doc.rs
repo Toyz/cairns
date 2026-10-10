@@ -94,22 +94,69 @@ pub fn new(
     Ok(())
 }
 
-/// Add entries to a page's evidence, keeping the ones it has.
-pub fn cite(root: &Path, config: &Config, page: &str, cited: &[u32]) -> Result<()> {
+/// Add entries to a page's evidence, keeping the ones it has - in its front
+/// matter, or under one of its headings with `section`. An entry is a number
+/// here, or `name:12` in another worklog.
+pub fn cite(
+    root: &Path,
+    config: &Config,
+    page: &str,
+    cited: &[String],
+    section: Option<&str>,
+) -> Result<()> {
     let dir = docs_dir(config)?;
-    check_entries_exist(root, config, cited)?;
+    let mut here = Vec::new();
+    for item in cited {
+        let item = item.trim();
+        if let Ok(number) = item.parse::<u32>() {
+            here.push(number);
+        } else if cairns_core::entry::parse_entry_ref(item).is_none() {
+            return Err(format!(
+                "{item:?} is not an entry number, or one in another worklog (`name:12`)"
+            )
+            .into());
+        }
+    }
+    check_entries_exist(root, config, &here)?;
+    let cited: Vec<String> = cited.iter().map(|c| c.trim().to_string()).collect();
     let path = find_page(root, config, dir, page)?;
     let text = std::fs::read_to_string(&path)?;
 
-    let (updated, all) = with_citations(&text, cited, &path)?;
+    let (updated, all) = match section {
+        Some(heading) => with_section_citations(&text, heading, &cited)?,
+        None => with_citations(&text, &cited, &path)?,
+    };
     std::fs::write(&path, updated)?;
-    println!("{} cites {}", path.display(), numbers(&all));
+    println!(
+        "{}{} cites {}",
+        path.display(),
+        section
+            .map(|h| format!(" under \"{h}\""))
+            .unwrap_or_default(),
+        all.join(", ")
+    );
     Ok(())
+}
+
+/// Items already in a list, then the new ones not among them.
+fn merged(existing: &str, cited: &[String]) -> Vec<String> {
+    let mut all: Vec<String> = existing
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect();
+    for item in cited {
+        if !all.contains(item) {
+            all.push(item.clone());
+        }
+    }
+    all
 }
 
 /// The page's text with `cited` added to its `worklog:` line, and the full list
 /// it ends up with. A page with no front matter gets some.
-fn with_citations(text: &str, cited: &[u32], path: &Path) -> Result<(String, Vec<u32>)> {
+fn with_citations(text: &str, cited: &[String], path: &Path) -> Result<(String, Vec<String>)> {
     let Some(rest) = text.strip_prefix("---\n") else {
         let title = text
             .lines()
@@ -121,8 +168,9 @@ fn with_citations(text: &str, cited: &[u32], path: &Path) -> Result<(String, Vec
         if !title.is_empty() {
             front.push_str(&format!("title: {title}\n"));
         }
-        front.push_str(&format!("worklog: {}\n---\n\n", numbers(cited)));
-        return Ok((format!("{front}{text}"), dedup(cited.to_vec())));
+        let all = merged("", cited);
+        front.push_str(&format!("worklog: {}\n---\n\n", all.join(", ")));
+        return Ok((format!("{front}{text}"), all));
     };
     let end = rest
         .find("\n---")
@@ -136,26 +184,83 @@ fn with_citations(text: &str, cited: &[u32], path: &Path) -> Result<(String, Vec
         match line.split_once(':') {
             Some((key, value)) if key.trim().eq_ignore_ascii_case("worklog") => {
                 found = true;
-                for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-                    all.push(part.parse::<u32>().map_err(|_| {
-                        format!(
-                            "{}: worklog has {part:?}, not an entry number",
-                            path.display()
-                        )
-                    })?);
-                }
-                all.extend_from_slice(cited);
-                all = dedup(all);
-                lines.push(format!("worklog: {}", numbers(&all)));
+                all = merged(value, cited);
+                lines.push(format!("worklog: {}", all.join(", ")));
             }
             _ => lines.push(line.to_string()),
         }
     }
     if !found {
-        all = dedup(cited.to_vec());
-        lines.push(format!("worklog: {}", numbers(&all)));
+        all = merged("", cited);
+        lines.push(format!("worklog: {}", all.join(", ")));
     }
     Ok((format!("---\n{}{after}", lines.join("\n")), all))
+}
+
+/// A `##` or `###` heading's text, or `None` when the line is not one.
+fn heading_of(line: &str) -> Option<&str> {
+    line.strip_prefix("### ")
+        .or_else(|| line.strip_prefix("## "))
+        .map(str::trim)
+}
+
+/// The page's text with `cited` added under one of its `##` or `###`
+/// headings, in the `<!-- worklog: ... -->` comment there - written when there
+/// is none.
+fn with_section_citations(
+    text: &str,
+    heading: &str,
+    cited: &[String],
+) -> Result<(String, Vec<String>)> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    let Some(at) = lines
+        .iter()
+        .position(|line| heading_of(line).is_some_and(|h| h.eq_ignore_ascii_case(heading.trim())))
+    else {
+        let known: Vec<&str> = lines.iter().filter_map(|line| heading_of(line)).collect();
+        return Err(format!(
+            "no section {heading:?} - the page's sections are: {}",
+            if known.is_empty() {
+                "none".to_string()
+            } else {
+                known.join(", ")
+            }
+        )
+        .into());
+    };
+    let mut out: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let section_end = lines[at + 1..]
+        .iter()
+        .position(|line| line.starts_with('#'))
+        .map(|offset| at + 1 + offset)
+        .unwrap_or(lines.len());
+    let comment = (at + 1..section_end).find(|&i| {
+        let line = lines[i].trim();
+        line.starts_with("<!--") && line.ends_with("-->") && line.contains("worklog:")
+    });
+    let all = match comment {
+        Some(i) => {
+            let inner = lines[i]
+                .trim()
+                .trim_start_matches("<!--")
+                .trim_end_matches("-->");
+            let existing = inner.trim().trim_start_matches("worklog:");
+            let all = merged(existing, cited);
+            out[i] = format!("<!-- worklog: {} -->", all.join(", "));
+            all
+        }
+        None => {
+            let all = merged("", cited);
+            out.insert(at + 1, format!("<!-- worklog: {} -->", all.join(", ")));
+            all
+        }
+    };
+    let mut text_out = out.join("\n");
+    if text.ends_with('\n') {
+        text_out.push('\n');
+    }
+    Ok((text_out, all))
 }
 
 /// Every page, how sure it is, what it rests on, and what needs looking at.
@@ -313,23 +418,41 @@ fn numbers(values: &[u32]) -> String {
         .join(", ")
 }
 
-/// In the order given, each once.
-fn dedup(values: Vec<u32>) -> Vec<u32> {
-    let mut out = Vec::new();
-    for value in values {
-        if !out.contains(&value) {
-            out.push(value);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn cited(text: &str, add: &[u32]) -> String {
-        with_citations(text, add, Path::new("docs/x.md")).unwrap().0
+        let add: Vec<String> = add.iter().map(u32::to_string).collect();
+        with_citations(text, &add, Path::new("docs/x.md"))
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn a_section_is_cited_under_its_heading() {
+        let text = "---\ntitle: X\n---\n\n# X\n\n## Layout\n\nBody.\n\n## Index\n<!-- worklog: 4 -->\nMore.\n";
+        let cite = |text: &str, heading: &str, add: &[&str]| {
+            let add: Vec<String> = add.iter().map(|s| s.to_string()).collect();
+            with_section_citations(text, heading, &add)
+        };
+        let (once, _) = cite(text, "layout", &["12", "piney:3"]).unwrap();
+        assert!(
+            once.contains("## Layout\n<!-- worklog: 12, piney:3 -->\n"),
+            "{once}"
+        );
+        let (twice, all) = cite(&once, "Index", &["4", "9"]).unwrap();
+        assert!(
+            twice.contains("## Index\n<!-- worklog: 4, 9 -->\nMore."),
+            "{twice}"
+        );
+        assert_eq!(all, vec!["4", "9"]);
+        assert!(
+            cite(text, "Nope", &["1"])
+                .unwrap_err()
+                .to_string()
+                .contains("Layout, Index")
+        );
     }
 
     #[test]
