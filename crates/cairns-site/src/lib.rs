@@ -13,6 +13,7 @@ pub mod reference;
 
 use cairns_core::Log;
 use serde::Serialize;
+use std::fmt::Write as _;
 
 /// One file in a rendered payload, at a path relative to the payload root.
 #[derive(Debug, Clone)]
@@ -78,15 +79,10 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
     }
     rendered.push("feed.xml", feed::atom(log));
 
-    let by_number = log
-        .entries
-        .iter()
-        .map(|entry| (entry.number, entry))
-        .collect();
     for (at, entry) in log.entries.iter().enumerate() {
         rendered.push(
             format!("{}-{}/index.html", entry.number, entry.slug),
-            html::entry(log, at, &by_number),
+            html::entry(log, at),
         );
         // `/<number>/` sends a reader on to the entry: a URL that needs only
         // the number, for another worklog linking here without its slug -
@@ -174,22 +170,23 @@ fn stylesheet(log: &Log) -> String {
     let mut css = String::from(include_str!("assets/style.css"));
     let colors = &log.colors;
     let block = |table: &std::collections::BTreeMap<String, String>| {
-        table
-            .iter()
-            .map(|(token, value)| format!("    --{token}: {};\n", value.trim()))
-            .collect::<String>()
+        table.iter().fold(String::new(), |mut out, (token, value)| {
+            let _ = writeln!(out, "    --{token}: {};", value.trim());
+            out
+        })
     };
     if !colors.is_empty() {
         css.push_str("\n/* [colors] from cairns.toml */\n");
         if !colors.both.is_empty() {
-            css.push_str(&format!(":root {{\n{}}}\n", block(&colors.both)));
+            let _ = write!(css, ":root {{\n{}}}\n", block(&colors.both));
         }
         for (scheme, table) in [("light", &colors.light), ("dark", &colors.dark)] {
             if !table.is_empty() {
-                css.push_str(&format!(
+                let _ = write!(
+                    css,
                     "@media (prefers-color-scheme: {scheme}) {{\n  :root {{\n{}  }}\n}}\n",
                     block(table)
-                ));
+                );
             }
         }
     }
@@ -241,17 +238,18 @@ pub fn render_index(log: &Log, header: Option<&str>, site: Option<&str>) -> Stri
         .join(", ");
     let total = log.entries.len();
     let plural = if total == 1 { "entry" } else { "entries" };
-    out.push_str(&format!("{total} {plural}: {tally}."));
+    let _ = write!(out, "{total} {plural}: {tally}.");
     let open = log.open_questions.len();
     if open > 0 {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             " {open} {} still {} open questions - [listed below](#still-open).",
             if open == 1 { "entry" } else { "entries" },
-            if open == 1 { "has" } else { "have" },
-        ));
+            if open == 1 { "has" } else { "have" }
+        );
     }
     if let Some(site) = site.map(str::trim).filter(|site| !site.is_empty()) {
-        out.push_str(&format!(" Read it as a site at <{site}>."));
+        let _ = write!(out, " Read it as a site at <{site}>.");
     }
     out.push_str("\n\n");
 
@@ -278,13 +276,14 @@ pub fn render_index(log: &Log, header: Option<&str>, site: Option<&str>) -> Stri
                     .join(", ")
             )
         };
-        out.push_str(&format!(
-            "| {} | [{title}]({}){corrected} | {} | {} |\n",
+        let _ = writeln!(
+            out,
+            "| {} | [{title}]({}){corrected} | {} | {} |",
             entry.number,
             entry.path,
             entry.date,
             entry.areas.join(", ")
-        ));
+        );
     }
 
     // What the log does not know yet, one line an entry, newest first: the
@@ -301,13 +300,14 @@ pub fn render_index(log: &Log, header: Option<&str>, site: Option<&str>) -> Stri
             } else {
                 String::new()
             };
-            out.push_str(&format!(
-                "- [{}. {}]({}){count} - {}\n",
+            let _ = writeln!(
+                out,
+                "- [{}. {}]({}){count} - {}",
                 entry.number,
                 entry.title.replace(['[', ']'], ""),
                 entry.path,
                 gist(&question.text)
-            ));
+            );
         }
     }
     out
@@ -448,8 +448,7 @@ mod tests {
         )]);
         built.readme = Some("# A Project".into());
         built.paths.readme = Some("README.md".into());
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        let page = html::entry(&built, 0, &by_number);
+        let page = html::entry(&built, 0);
         // No repository is configured, so these used to stay relative links to
         // files the site does not have.
         assert!(page.contains("<a href=\"../\">index</a>"), "{page}");
@@ -508,8 +507,7 @@ mod tests {
                 "Prose.\n\n**Still unknown:** nothing",
             ),
         ]);
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        let asked = html::entry(&built, 0, &by_number);
+        let asked = html::entry(&built, 0);
         assert!(asked.contains("unknown--answered"), "{asked}");
         assert!(
             asked.contains("Closed by <a href=\"../2-title-2/\">No. 2"),
@@ -550,8 +548,7 @@ mod tests {
             &format!("number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec\nfiles: {files}"),
             "Some prose.\n\n**Still unknown:** nothing",
         )]);
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        html::entry(&built, 0, &by_number)
+        html::entry(&built, 0)
     }
 
     #[test]
@@ -587,8 +584,7 @@ mod tests {
     #[test]
     fn the_entry_page_renders_prose_once_and_the_trailer_separately() {
         let built = simple();
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        let page = html::entry(&built, 0, &by_number);
+        let page = html::entry(&built, 0);
         // Once in the article. It also appears in the two meta descriptions,
         // because the summary is derived from the first sentence - which is
         // the point of deriving it, not a duplicate.
@@ -616,8 +612,7 @@ mod tests {
             "number: 1\ntitle: Title 1\ndate: 2026-09-20\narea: spec",
             "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n```\ncode\n```",
         )]);
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        let page = html::entry(&built, 0, &by_number);
+        let page = html::entry(&built, 0);
         assert!(page.contains("<table>"), "tables are not enabled");
         assert!(page.contains("<pre>"), "code blocks are not rendering");
     }
@@ -628,8 +623,7 @@ mod tests {
             "number: 1\ntitle: A \"quoted\" <script> & co\ndate: 2026-09-20\narea: spec",
             "Prose.",
         )]);
-        let by_number = built.entries.iter().map(|e| (e.number, e)).collect();
-        let page = html::entry(&built, 0, &by_number);
+        let page = html::entry(&built, 0);
         // The title's own tag, not any `<script>`: the page carries one of
         // its own, for the arrow keys.
         assert!(
@@ -652,14 +646,12 @@ mod tests {
                 "The right one.",
             ),
         ]);
-        let by_number: std::collections::BTreeMap<_, _> =
-            built.entries.iter().map(|e| (e.number, e)).collect();
 
-        let overturned = html::entry(&built, 0, &by_number);
+        let overturned = html::entry(&built, 0);
         assert!(overturned.contains("Revisited later"));
         assert!(overturned.contains("../2-title-2/"));
 
-        let correcting = html::entry(&built, 1, &by_number);
+        let correcting = html::entry(&built, 1);
         assert!(correcting.contains("revisits"));
         assert!(correcting.contains("../1-title-1/"));
     }
@@ -714,7 +706,7 @@ mod docs_tests {
                 .unwrap()
             })
             .collect();
-        Log::build_with(&config, vec![entry], docs, None)
+        Log::build_with(&config, vec![entry], &docs, None)
     }
 
     /// Hellbender's `docs/README.md` has an empty slug and an empty section, so
@@ -774,8 +766,7 @@ mod reference_tests {
             })
             .collect();
         let log = Log::build(&config, entries, None);
-        let by_number = log.entries.iter().map(|e| (e.number, e)).collect();
-        html::entry(&log, 1, &by_number)
+        html::entry(&log, 1)
     }
 
     #[test]
@@ -850,7 +841,7 @@ mod listing_tests {
             .unwrap()
         })
         .collect();
-        let docs = [
+        let docs: Vec<Doc> = [
             ("docs/README.md", "---\ntitle: Ref\n---\n\n# Ref\n\nOurs.\n\n<!-- cairns:index -->\n\nold listing\n"),
             (
                 "docs/formats/a.md",
@@ -867,7 +858,7 @@ mod listing_tests {
             .unwrap()
         })
         .collect();
-        Log::build_with(&config, entries, docs, None)
+        Log::build_with(&config, entries, &docs, None)
     }
 
     #[test]
@@ -957,5 +948,94 @@ mod listing_tests {
             "{out}"
         );
         assert!(!render_index(&log, None, None).contains("Read it as a site"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+    use cairns_core::{Config, Doc, Entry, RawEntry};
+
+    /// Markup no field may carry into a page as markup.
+    const BAD: &str = "<b>x</b>\"'";
+
+    /// Every string a project or an author controls, hostile, rendered into
+    /// every page: none of it may arrive as markup. Prose is markdown and may
+    /// hold HTML by design; everything else is text.
+    #[test]
+    fn nothing_a_project_writes_becomes_markup() {
+        let q = BAD.replace('"', "\\\"");
+        let config = Config::parse(&format!(
+            "spec_version = 1\n[project]\nname = \"{q}\"\nslug = \"p\"\ndescription = \"{q}\"\n\
+             repository = \"https://example.com/{q}\"\nlicense = \"{q}\"\ntext_license = \"CC-BY-4.0\"\n\
+             [site]\nbase_url = \"https://example.com/p/\"\n\
+             [docs]\ndir = \"docs\"\nlabel = \"{q}\"\n\
+             [[docs.section]]\ndir = \"formats\"\ntitle = \"{q}\"\nabout = \"{q}\"\n\
+             [[docs.field]]\nname = \"volumes\"\nlabel = \"{q}\"\n\
+             [[link]]\nlabel = \"{q}\"\nurl = \"https://example.com/{q}\"\n\
+             [[area]]\nname = \"spec\"\nabout = \"{q}\"\n"
+        ))
+        .unwrap();
+        let entries: Vec<Entry> = [1u32, 2]
+            .iter()
+            .map(|n| {
+                let extra = if *n == 2 {
+                    "supersedes: 1\nresolves: 1.1\n"
+                } else {
+                    ""
+                };
+                Entry::parse(&RawEntry {
+                    path: format!("worklog/000{n}-e.md"),
+                    bytes: format!(
+                        "---\nnumber: {n}\ntitle: {BAD}\ndate: 2026-09-20\narea: spec\n\
+                         files: {BAD}\nsummary: {BAD}\nstarted: {BAD}\ntook: 5m\n{extra}---\n\n\
+                         # {n}. {BAD}\n\nProse [[1]].\n\n**Still unknown:**\n- one\n- two\n"
+                    )
+                    .into_bytes(),
+                })
+                .unwrap()
+            })
+            .collect();
+        let docs: Vec<Doc> = [
+            ("docs/README.md", format!("---\ntitle: {BAD}\n---\n\n# {BAD}\n\nOurs.\n")),
+            (
+                "docs/formats/a.md",
+                format!(
+                    "---\ntitle: {BAD}\nstatus: solid\nvolumes: {BAD}\ncovers: {BAD}; {BAD}\n\
+                     worklog: 1\n---\n\n# A\n\nText.\n\n## Layout\n<!-- worklog: 1 -->\n\n## Unknown\n\n- x\n"
+                ),
+            ),
+        ]
+        .iter()
+        .map(|(path, text)| {
+            Doc::parse(&RawEntry {
+                path: (*path).into(),
+                bytes: text.clone().into_bytes(),
+            })
+            .unwrap()
+        })
+        .collect();
+        let mut log = Log::build_with(&config, entries, &docs, None);
+        log.readme = Some(format!("# {BAD}\n\nAbout.\n"));
+        for doc in &mut log.docs {
+            doc.changed = Some(BAD.into());
+        }
+        let rendered = render(&log).unwrap();
+        let mut leaks = Vec::new();
+        for file in &rendered.files {
+            if !(file.path.ends_with(".html") || file.path.ends_with(".xml")) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&file.bytes);
+            for (at, _) in text.match_indices("<b>") {
+                let from = text[..at]
+                    .char_indices()
+                    .rev()
+                    .nth(80)
+                    .map_or(0, |(i, _)| i);
+                leaks.push(format!("{}: ...{}", file.path, &text[from..at + 3]));
+            }
+        }
+        assert!(leaks.is_empty(), "unescaped:\n{}", leaks.join("\n\n"));
     }
 }

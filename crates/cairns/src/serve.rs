@@ -11,6 +11,7 @@
 //! nothing else. The script is injected on the way out and is never in what
 //! `cairns build` writes.
 
+use crate::Result;
 use cairns_core::{Config, Log};
 use cairns_site::Rendered;
 use std::io::{BufRead, BufReader, Write};
@@ -27,17 +28,12 @@ fetch('/_cairns/reload',{cache:'no-store'}).then(function(r){return r.text()}).t
 if(seen===null){seen=n;return}if(n!==seen){location.reload()}}).catch(function(){})},600)})();\
 </script>";
 
-pub fn serve(
-    root: PathBuf,
-    mut config: Config,
-    port: u16,
-    open: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn serve(root: &Path, mut config: Config, port: u16, open: bool) -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let address = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
 
-    let mut site = build(&root, &config)?;
-    let mut built_at = newest(&root, &config);
+    let mut site = build(root, &config)?;
+    let mut built_at = newest(root, &config);
     let mut generation: u64 = 0;
 
     // The version, because a server started before an upgrade keeps running
@@ -67,17 +63,17 @@ pub fn serve(
         // Stat before serving rather than watching: one pass over the entries
         // costs less than a filesystem watcher costs to depend on, and a
         // preview that is ever stale is worse than one that is slow.
-        let now = newest(&root, &config);
+        let now = newest(root, &config);
         if now != built_at {
             // `cairns.toml` is one of the files watched, so it is read again
             // too. It used to be read once at start: a colour changed in it
             // triggered a rebuild, with the old colours, and looked like
             // `[colors]` not working.
-            match crate::load_config(&root) {
+            match crate::project::load_config(root) {
                 Ok(fresh) => config = fresh,
                 Err(problem) => eprintln!("cairns: cairns.toml: {problem}"),
             }
-            match build(&root, &config) {
+            match build(root, &config) {
                 Ok(fresh) => {
                     site = fresh;
                     built_at = now;
@@ -98,9 +94,9 @@ pub fn serve(
     Ok(())
 }
 
-fn build(root: &Path, config: &Config) -> Result<Rendered, Box<dyn std::error::Error>> {
-    let built: Log = crate::build_log(root, config, None)?;
-    crate::render_site(root, &built)
+fn build(root: &Path, config: &Config) -> Result<Rendered> {
+    let built: Log = crate::project::build_log(root, config, None)?;
+    crate::project::render_site(root, &built)
 }
 
 /// The newest modification time across everything the site is built from.

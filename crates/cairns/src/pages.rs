@@ -55,7 +55,7 @@ pub fn web_address(remote: &str) -> Option<String> {
         rest.split_once(':')?
     } else {
         let rest = remote.split_once("://")?.1;
-        let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
         rest.split_once('/')?
     };
     let host = host.to_ascii_lowercase();
@@ -93,7 +93,7 @@ pub fn from_remote(remote: &str) -> Option<String> {
         rest.split_once(':')?
     } else {
         let rest = remote.split_once("://")?.1;
-        let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
         rest.split_once('/')?
     };
     from_host_and_path(host, path)

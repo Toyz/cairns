@@ -366,7 +366,7 @@ fn item_refs(questions: &[crate::entry::QuestionRef]) -> Vec<String> {
     questions
         .iter()
         .filter(|q| q.item.is_some())
-        .map(|q| q.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -419,7 +419,7 @@ impl Log {
 
     /// Build the canonical document. `entries` may arrive in any order.
     pub fn build(config: &Config, entries: Vec<Entry>, generated: Option<String>) -> Log {
-        Log::build_with(config, entries, Vec::new(), generated)
+        Log::build_with(config, entries, &[], generated)
     }
 
     /// Build the document from the entries and the reference pages together,
@@ -428,223 +428,106 @@ impl Log {
     pub fn build_with(
         config: &Config,
         mut entries: Vec<Entry>,
-        docs: Vec<crate::Doc>,
+        docs: &[crate::Doc],
         generated: Option<String>,
     ) -> Log {
         entries.sort_by_key(|entry| entry.front.number);
-
-        let mut corrected: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        let mut linked: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        for entry in &entries {
-            for reference in crate::entry::references(&entry.body) {
-                if reference.workspace.is_some() {
-                    continue;
-                }
-                let from = linked.entry(reference.number).or_default();
-                if reference.number != entry.front.number && !from.contains(&entry.front.number) {
-                    from.push(entry.front.number);
-                }
-            }
-        }
-        // Keyed by question: `(54, None)` is the whole trailer, `(54, Some(2))`
-        // its second question.
-        let mut answered: BTreeMap<(u32, Option<u32>), Vec<u32>> = BTreeMap::new();
-        let mut carried: BTreeMap<(u32, Option<u32>), Vec<u32>> = BTreeMap::new();
-        for entry in &entries {
-            for older in &entry.front.supersedes {
-                corrected
-                    .entry(*older)
-                    .or_default()
-                    .push(entry.front.number);
-            }
-            for question in &entry.front.resolves {
-                answered
-                    .entry((question.entry, question.item))
-                    .or_default()
-                    .push(entry.front.number);
-            }
-            for question in &entry.front.carries {
-                carried
-                    .entry((question.entry, question.item))
-                    .or_default()
-                    .push(entry.front.number);
-            }
-        }
-
         let base = config.site.base_url.trim_end_matches('/');
         let docs_root = config
             .docs
             .as_ref()
-            .map(|docs| docs.dir.as_str())
-            .unwrap_or("docs");
+            .map_or("docs", |docs| docs.dir.as_str());
 
-        // A page names the entries it rests on; an entry learns which pages
-        // rest on it by inverting that.
-        let mut cited: BTreeMap<u32, Vec<String>> = BTreeMap::new();
-        let mut citations: BTreeMap<u32, Vec<DocCitation>> = BTreeMap::new();
+        let mut edges = Edges::between(&entries);
         let pages: Vec<DocPage> = docs
             .iter()
-            .map(|doc| {
-                let slug = doc.slug(docs_root);
-                for number in &doc.worklog {
-                    cited.entry(*number).or_default().push(doc.title.clone());
-                    citations.entry(*number).or_default().push(DocCitation {
-                        title: doc.title.clone(),
-                        slug: slug.clone(),
-                        section: None,
-                        anchor: None,
-                    });
-                }
-                // A section's evidence is evidence for the page too, and the
-                // entry it names links to the section itself.
-                for section in &doc.sections {
-                    for number in &section.worklog {
-                        let titles = cited.entry(*number).or_default();
-                        if !titles.contains(&doc.title) {
-                            titles.push(doc.title.clone());
-                        }
-                        citations.entry(*number).or_default().push(DocCitation {
-                            title: doc.title.clone(),
-                            slug: slug.clone(),
-                            section: Some(section.heading.clone()),
-                            anchor: Some(section.anchor.clone()),
-                        });
-                    }
-                }
-                DocPage {
-                    url: format!("{base}/docs/{slug}"),
-                    slug,
-                    path: doc.path.clone(),
-                    title: doc.title.clone(),
-                    section: doc.section(docs_root),
-                    is_index: doc.is_index(),
-                    status: doc.status,
-                    worklog: doc.worklog.clone(),
-                    elsewhere: doc.elsewhere.clone(),
-                    sections: doc.sections.clone(),
-                    covers: doc.covers.clone(),
-                    body: doc.body.clone(),
-                    content_hash: doc.content_hash.clone(),
-                    changed: None,
-                    extra: doc
-                        .extra
-                        .iter()
-                        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-                        .collect(),
-                }
-            })
+            .map(|doc| edges.page(doc, docs_root, base))
             .collect();
-        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+
         let mut open_questions = Vec::new();
         let mut built = Vec::with_capacity(entries.len());
-
-        for entry in &entries {
-            for area in &entry.front.areas {
-                *counts.entry(area.as_str()).or_default() += 1;
-            }
+        // The entries are the log's now: their fields move into it.
+        for entry in entries {
             let number = entry.front.number;
             let still_unknown = entry.still_unknown();
-            let whole = |map: &BTreeMap<(u32, Option<u32>), Vec<u32>>| {
-                map.get(&(number, None)).cloned().unwrap_or_default()
-            };
-            let resolved_by = whole(&answered);
-            let carried_to = whole(&carried);
+            let resolved_by = edges.of(&edges.answered, &(number, None));
+            let carried_to = edges.of(&edges.carried, &(number, None));
             let (preamble, items) = still_unknown
                 .as_deref()
                 .map(crate::entry::question_items)
                 .unwrap_or_default();
             let questions: Vec<Question> = items
                 .into_iter()
-                .enumerate()
-                .map(|(at, text)| {
-                    let key = (number, Some(at as u32 + 1));
-                    Question {
-                        number: at as u32 + 1,
-                        text,
-                        resolved_by: answered.get(&key).cloned().unwrap_or_default(),
-                        carried_to: carried.get(&key).cloned().unwrap_or_default(),
-                    }
+                .zip(1u32..)
+                .map(|(text, at)| Question {
+                    number: at,
+                    text,
+                    resolved_by: edges.of(&edges.answered, &(number, Some(at))),
+                    carried_to: edges.of(&edges.carried, &(number, Some(at))),
                 })
                 .collect();
             // A question answered or taken over is no longer open here. It
             // stays on the entry that asked it, pointing at what closed it or
-            // where it went. A list is open while any of its questions is.
+            // where it went.
             if let Some(text) = &still_unknown
                 && resolved_by.is_empty()
                 && carried_to.is_empty()
+                && let Some(open) = still_open(number, text, &preamble, &questions)
             {
-                let open: Vec<Question> =
-                    questions.iter().filter(|q| q.is_open()).cloned().collect();
-                if questions.is_empty() {
-                    open_questions.push(OpenQuestion {
-                        entry: number,
-                        text: text.clone(),
-                        items: Vec::new(),
-                    });
-                } else if !open.is_empty() {
-                    let text = if open.len() == questions.len() {
-                        text.clone()
-                    } else {
-                        let list: Vec<String> =
-                            open.iter().map(|q| format!("- {}", q.text)).collect();
-                        match preamble.is_empty() {
-                            true => list.join("\n"),
-                            false => format!("{preamble}\n{}", list.join("\n")),
-                        }
-                    };
-                    open_questions.push(OpenQuestion {
-                        entry: number,
-                        text,
-                        items: open,
-                    });
-                }
+                open_questions.push(open);
             }
 
             let slug = entry.slug();
+            let summary = entry.summary();
+            let resolves = whole_refs(&entry.front.resolves);
+            let resolves_questions = item_refs(&entry.front.resolves);
+            let carries = whole_refs(&entry.front.carries);
+            let carries_questions = item_refs(&entry.front.carries);
+            let extra = strings(&entry.front.extra);
+            let Entry {
+                path,
+                front,
+                body,
+                content_hash,
+                ..
+            } = entry;
             built.push(LogEntry {
-                id: format!("{}/{}", config.project.slug, entry.front.number),
-                number: entry.front.number,
-                url: format!("{base}/{}-{slug}", entry.front.number),
+                id: format!("{}/{}", config.project.slug, number),
+                number,
+                url: format!("{base}/{number}-{slug}"),
                 slug,
-                path: entry.path.clone(),
-                title: entry.front.title.clone(),
-                date: entry.front.date,
-                areas: entry.front.areas.clone(),
-                files: entry.front.files.clone(),
-                summary: entry.summary(),
-                supersedes: entry.front.supersedes.clone(),
-                superseded_by: corrected
-                    .get(&entry.front.number)
-                    .cloned()
-                    .unwrap_or_default(),
-                resolves: whole_refs(&entry.front.resolves),
-                resolves_questions: item_refs(&entry.front.resolves),
-                carries: whole_refs(&entry.front.carries),
-                carries_questions: item_refs(&entry.front.carries),
+                path,
+                title: front.title,
+                date: front.date,
+                areas: front.areas,
+                files: front.files,
+                summary,
+                supersedes: front.supersedes,
+                superseded_by: edges.of(&edges.corrected, &number),
+                resolves,
+                resolves_questions,
+                carries,
+                carries_questions,
                 resolved_by,
                 carried_to,
                 questions,
-                documented_by: cited.get(&entry.front.number).cloned().unwrap_or_default(),
-                documented_in: citations
-                    .get(&entry.front.number)
-                    .cloned()
-                    .unwrap_or_default(),
-                referenced_by: linked.get(&entry.front.number).cloned().unwrap_or_default(),
+                documented_by: edges.of(&edges.cited, &number),
+                documented_in: edges.of(&edges.citations, &number),
+                referenced_by: edges.of(&edges.linked, &number),
                 attachments: Vec::new(),
                 still_unknown,
-                started: entry.front.started.clone(),
-                took_minutes: entry.front.took,
-                body: entry.body.clone(),
-                content_hash: entry.content_hash.clone(),
-                extra: entry
-                    .front
-                    .extra
-                    .iter()
-                    .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-                    .collect(),
+                started: front.started,
+                took_minutes: front.took,
+                body,
+                content_hash,
+                extra,
             });
         }
 
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for area in built.iter().flat_map(|entry| &entry.areas) {
+            *counts.entry(area.as_str()).or_default() += 1;
+        }
         // Declared order, not count order, because the areas are a taxonomy the
         // project chose and reordering it by popularity hides that.
         let areas = config
@@ -657,6 +540,7 @@ impl Log {
             })
             .collect();
 
+        let docs_config = config.docs.as_ref();
         Log {
             spec_version: crate::SPEC_VERSION,
             generator: format!("cairns {}", version()),
@@ -680,15 +564,11 @@ impl Log {
             open_questions,
             readme: None,
             docs: pages,
-            docs_label: config.docs.as_ref().map(|docs| docs.label.clone()),
-            docs_sections: config
-                .docs
-                .as_ref()
+            docs_label: docs_config.map(|docs| docs.label.clone()),
+            docs_sections: docs_config
                 .map(|docs| docs.sections.clone())
                 .unwrap_or_default(),
-            docs_fields: config
-                .docs
-                .as_ref()
+            docs_fields: docs_config
                 .map(|docs| docs.fields.clone())
                 .unwrap_or_default(),
             links: config.links.clone(),
@@ -705,6 +585,165 @@ impl Log {
             },
         }
     }
+}
+
+/// Every edge in the log, inverted: each is written once, on the entry or
+/// page that could know it, and read from the other end.
+#[derive(Default)]
+struct Edges {
+    /// Entry -> the entries that corrected it.
+    corrected: BTreeMap<u32, Vec<u32>>,
+    /// Entry -> the entries that link to it with `[[N]]`.
+    linked: BTreeMap<u32, Vec<u32>>,
+    /// Question -> the entries that answered it. `(54, None)` is the whole
+    /// trailer, `(54, Some(2))` its second question.
+    answered: BTreeMap<(u32, Option<u32>), Vec<u32>>,
+    /// Question -> the entries that took it over.
+    carried: BTreeMap<(u32, Option<u32>), Vec<u32>>,
+    /// Entry -> the titles of the pages that cite it.
+    cited: BTreeMap<u32, Vec<String>>,
+    /// Entry -> the pages, and sections of pages, that cite it.
+    citations: BTreeMap<u32, Vec<DocCitation>>,
+}
+
+impl Edges {
+    /// The edges between entries.
+    fn between(entries: &[Entry]) -> Edges {
+        let mut edges = Edges::default();
+        for entry in entries {
+            let number = entry.front.number;
+            for reference in crate::entry::references(&entry.body) {
+                if reference.workspace.is_some() || reference.number == number {
+                    continue;
+                }
+                let from = edges.linked.entry(reference.number).or_default();
+                if !from.contains(&number) {
+                    from.push(number);
+                }
+            }
+            for older in &entry.front.supersedes {
+                edges.corrected.entry(*older).or_default().push(number);
+            }
+            for question in &entry.front.resolves {
+                edges
+                    .answered
+                    .entry((question.entry, question.item))
+                    .or_default()
+                    .push(number);
+            }
+            for question in &entry.front.carries {
+                edges
+                    .carried
+                    .entry((question.entry, question.item))
+                    .or_default()
+                    .push(number);
+            }
+        }
+        edges
+    }
+
+    /// A reference page, as the document carries it, with the entries it
+    /// cites learning that it does.
+    fn page(&mut self, doc: &crate::Doc, docs_root: &str, base: &str) -> DocPage {
+        let slug = doc.slug(docs_root);
+        let citation = |section: Option<&crate::doc::SectionEvidence>| DocCitation {
+            title: doc.title.clone(),
+            slug: slug.clone(),
+            section: section.map(|section| section.heading.clone()),
+            anchor: section.map(|section| section.anchor.clone()),
+        };
+        for number in &doc.worklog {
+            self.cited
+                .entry(*number)
+                .or_default()
+                .push(doc.title.clone());
+            self.citations
+                .entry(*number)
+                .or_default()
+                .push(citation(None));
+        }
+        // A section's evidence is evidence for the page too, and the entry it
+        // names links to the section itself.
+        for section in &doc.sections {
+            for number in &section.worklog {
+                let titles = self.cited.entry(*number).or_default();
+                if !titles.contains(&doc.title) {
+                    titles.push(doc.title.clone());
+                }
+                self.citations
+                    .entry(*number)
+                    .or_default()
+                    .push(citation(Some(section)));
+            }
+        }
+        DocPage {
+            url: format!("{base}/docs/{slug}"),
+            slug,
+            path: doc.path.clone(),
+            title: doc.title.clone(),
+            section: doc.section(docs_root),
+            is_index: doc.is_index(),
+            status: doc.status,
+            worklog: doc.worklog.clone(),
+            elsewhere: doc.elsewhere.clone(),
+            sections: doc.sections.clone(),
+            covers: doc.covers.clone(),
+            body: doc.body.clone(),
+            content_hash: doc.content_hash.clone(),
+            changed: None,
+            extra: strings(&doc.extra),
+        }
+    }
+
+    /// What one end of an edge has at the other: nothing, when nothing does.
+    fn of<K: Ord, V: Clone>(&self, map: &BTreeMap<K, Vec<V>>, key: &K) -> Vec<V> {
+        map.get(key).cloned().unwrap_or_default()
+    }
+}
+
+/// What of an entry's trailer is still open, when anything is: the whole of
+/// it, or the questions of its list nothing has closed. A list is open while
+/// any of its questions is.
+fn still_open(
+    number: u32,
+    text: &str,
+    preamble: &str,
+    questions: &[Question],
+) -> Option<OpenQuestion> {
+    if questions.is_empty() {
+        return Some(OpenQuestion {
+            entry: number,
+            text: text.to_string(),
+            items: Vec::new(),
+        });
+    }
+    let open: Vec<Question> = questions.iter().filter(|q| q.is_open()).cloned().collect();
+    if open.is_empty() {
+        return None;
+    }
+    let text = if open.len() == questions.len() {
+        text.to_string()
+    } else {
+        let list: Vec<String> = open.iter().map(|q| format!("- {}", q.text)).collect();
+        if preamble.is_empty() {
+            list.join("\n")
+        } else {
+            format!("{preamble}\n{}", list.join("\n"))
+        }
+    };
+    Some(OpenQuestion {
+        entry: number,
+        text,
+        items: open,
+    })
+}
+
+/// Front matter kept as written, as JSON strings.
+fn strings(fields: &BTreeMap<String, String>) -> serde_json::Map<String, Value> {
+    fields
+        .iter()
+        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+        .collect()
 }
 
 /// What `cairns check` reports about the reference pages.
@@ -967,7 +1006,7 @@ mod tests {
     fn a_question_number_past_the_list_is_rejected() {
         let asking = entry(1, "", "Prose.\n\n**Still unknown:**\n- one\n- two");
         let past = entry(2, "resolves: 1.3\n", "Prose.\n\n**Still unknown:** nothing");
-        let found = problems(&config(), &[asking.clone(), past]);
+        let found = problems(&config(), &[asking, past]);
         assert!(
             found.iter().any(|p| p.contains("lists 2 questions")),
             "{found:?}"

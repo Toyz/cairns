@@ -191,11 +191,7 @@ pub fn fresh(log: &Log, docs_dir: &str) -> String {
 /// heading and a table for each folder below it.
 fn listing(log: &Log, readme: &DocPage) -> String {
     let within = readme.slug.as_str();
-    let dir = readme
-        .path
-        .rsplit_once('/')
-        .map(|(dir, _)| dir)
-        .unwrap_or("");
+    let dir = readme.path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut out = String::new();
 
     let here: Vec<&DocPage> = log
@@ -254,7 +250,7 @@ fn table(log: &Log, pages: &[&DocPage], dir: &str) -> String {
             "| [{}]({}) | {} |",
             cell(&doc.title),
             relative(dir, &doc.path),
-            doc.status.map(|status| status.name()).unwrap_or("-")
+            doc.status.map_or("-", cairns_core::Status::name)
         );
         for field in &columns {
             let _ = write!(

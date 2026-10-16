@@ -21,6 +21,12 @@ impl Date {
     /// keeps this crate dependency-free and `wasm32`-clean. The binary reaches
     /// for a real time library to get the *local* date, because a worklog entry
     /// written at eleven at night should not be dated tomorrow.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the day is 1 to 31 and the month 1 to 12 by construction; a year past \
+                  i32 is a timestamp no clock gives"
+    )]
     pub fn from_unix_seconds(seconds: i64) -> Date {
         let days = seconds.div_euclid(86_400) + 719_468;
         let era = if days >= 0 { days } else { days - 146_096 } / 146_097;

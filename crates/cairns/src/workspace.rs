@@ -119,7 +119,8 @@ fn read_project(other: &Path, path: &str) -> Result<Workspace, String> {
         .map_err(|_| format!("no cairns project at {path}"))?;
     let config =
         Config::parse(&text).map_err(|problem| format!("{path}/cairns.toml: {problem}"))?;
-    let entries = crate::read_entries(other, &config).map_err(|problem| problem.to_string())?;
+    let entries =
+        crate::project::read_entries(other, &config).map_err(|problem| problem.to_string())?;
     Ok(Workspace {
         url: config.site.base_url.trim_end_matches('/').to_string(),
         entries: entries

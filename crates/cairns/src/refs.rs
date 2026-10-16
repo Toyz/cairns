@@ -49,7 +49,7 @@ pub fn scan(root: &Path, config: &cairns_core::Config) -> BTreeMap<u32, Vec<Code
             for number in mentions(line, &entries_dir) {
                 found.entry(number).or_default().push(CodeMention {
                     path: path.clone(),
-                    line: at as u32 + 1,
+                    line: crate::code::line_number(at + 1),
                     text: line.trim().chars().take(160).collect(),
                 });
             }

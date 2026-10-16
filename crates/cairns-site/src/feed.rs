@@ -15,11 +15,10 @@ pub const FEED_ENTRIES: usize = 25;
 
 pub fn atom(log: &Log) -> String {
     let base = log.project.base_url.trim_end_matches('/');
-    let updated = log
-        .entries
-        .last()
-        .map(|entry| format!("{}T00:00:00Z", entry.date))
-        .unwrap_or_else(|| "1970-01-01T00:00:00Z".into());
+    let updated = log.entries.last().map_or_else(
+        || "1970-01-01T00:00:00Z".into(),
+        |entry| format!("{}T00:00:00Z", entry.date),
+    );
 
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     let _ = write!(
@@ -69,11 +68,10 @@ pub fn atom(log: &Log) -> String {
             title = escape(&entry.title),
             url = escape(&entry.url),
             date = entry.date,
-            categories = entry
-                .areas
-                .iter()
-                .map(|area| format!("<category term=\"{}\"/>\n", escape(area)))
-                .collect::<String>(),
+            categories = entry.areas.iter().fold(String::new(), |mut out, area| {
+                let _ = writeln!(out, "<category term=\"{}\"/>", escape(area));
+                out
+            }),
             summary = escape(&crate::html::plain_md(
                 entry.summary.as_deref().unwrap_or(&entry.title)
             )),

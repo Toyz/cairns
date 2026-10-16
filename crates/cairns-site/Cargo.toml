@@ -18,3 +18,6 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # Pure-Rust regex and the bundled grammars only: no C dependency, no themes -
 # the colours come from the site's own stylesheet, by class.
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "html", "regex-fancy", "yaml-load"] }
+
+[lints]
+workspace = true

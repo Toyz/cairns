@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+use crate::Result;
 
 /// A clock that is running.
 pub struct Clock {

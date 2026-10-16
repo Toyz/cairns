@@ -87,13 +87,13 @@ pub fn resolve(root: &Path, code: &CodeRef, with_text: bool) -> ResolvedCode {
                 ));
                 return resolved;
             }
-            Some((start, end.min(lines.len() as u32)))
+            Some((start, end.min(line_number(lines.len()))))
         }
         (None, None) => None,
     };
     resolved.lines = span;
     if with_text {
-        let (start, end) = span.unwrap_or((1, lines.len() as u32));
+        let (start, end) = span.unwrap_or((1, line_number(lines.len())));
         // A whole file embedded is a mistake more often than a wish; it is
         // cut at a screenful and says so.
         let end = end.min(start + 199);
@@ -154,7 +154,10 @@ fn find_definition(lines: &[&str], symbol: &str) -> Option<(u32, u32)> {
             .iter()
             .position(|line| occurrences(line, symbol).next().is_some())
     })?;
-    Some((start as u32 + 1, block_end(lines, start) as u32 + 1))
+    Some((
+        line_number(start + 1),
+        line_number(block_end(lines, start) + 1),
+    ))
 }
 
 /// Where `symbol` occurs in `line` as a whole identifier.
@@ -260,6 +263,12 @@ fn strip_strings_and_comments(line: &str) -> String {
         }
     }
     out
+}
+
+/// A line's number - its index plus one, or a count of lines - as the `u32`
+/// the log carries. A file of four billion lines is not one anybody cites.
+pub fn line_number(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

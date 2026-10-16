@@ -105,23 +105,11 @@ pub fn clean_svg(text: &str) -> Result<String, String> {
     // The prolog, a doctype and leading comments are not part of the drawing.
     loop {
         if let Some(after) = rest.strip_prefix("<?") {
-            rest = after
-                .split_once("?>")
-                .map(|(_, r)| r)
-                .unwrap_or("")
-                .trim_start();
+            rest = after.split_once("?>").map_or("", |(_, r)| r).trim_start();
         } else if let Some(after) = rest.strip_prefix("<!--") {
-            rest = after
-                .split_once("-->")
-                .map(|(_, r)| r)
-                .unwrap_or("")
-                .trim_start();
+            rest = after.split_once("-->").map_or("", |(_, r)| r).trim_start();
         } else if rest.starts_with("<!") {
-            rest = rest
-                .split_once('>')
-                .map(|(_, r)| r)
-                .unwrap_or("")
-                .trim_start();
+            rest = rest.split_once('>').map_or("", |(_, r)| r).trim_start();
         } else {
             break;
         }
@@ -151,7 +139,7 @@ pub fn clean_svg(text: &str) -> Result<String, String> {
         }
         let name: String = lower[at..]
             .chars()
-            .take_while(|c| c.is_ascii_alphabetic())
+            .take_while(char::is_ascii_alphabetic)
             .collect();
         let after = lower[at + name.len()..].trim_start();
         if name.len() > 2 && after.starts_with('=') {

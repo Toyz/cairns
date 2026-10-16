@@ -80,7 +80,13 @@ mod fs {
     impl Source for FsSource {
         fn entries(&self) -> Result<Vec<RawEntry>> {
             let mut found = Vec::new();
-            self.walk(&self.root.join(&self.dir), &self.dir, &mut found)?;
+            let dir = self.root.join(&self.dir);
+            // A log with no entries yet may have no directory for them yet;
+            // that is an empty log, not an error.
+            if !dir.exists() {
+                return Ok(found);
+            }
+            self.walk(&dir, &self.dir, &mut found)?;
             found.sort_by(|a, b| a.path.cmp(&b.path));
             Ok(found)
         }

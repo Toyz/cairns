@@ -16,6 +16,25 @@ authors = ["Toyz"]
 keywords = ["worklog", "changelog", "documentation", "markdown", "static-site"]
 categories = ["command-line-utilities", "development-tools"]
 
+# Beyond clippy's defaults: the ones that catch work done for nothing - a
+# string built to be appended, an argument taken by value and only read, a
+# clone of something already owned - and numbers narrowed without a check.
+# Each was in the code when they were turned on.
+[workspace.lints.clippy]
+format_push_string = "warn"
+format_collect = "warn"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+redundant_closure_for_method_calls = "warn"
+map_unwrap_or = "warn"
+single_char_pattern = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_string_new = "warn"
+needless_collect = "warn"
+
 [profile.release]
 strip = true
 lto = "thin"

@@ -214,7 +214,7 @@ impl Parser {
                     .map_err(|_| format!("{value:?} is not a date, YYYY-MM-DD"))?,
             ),
             Field::Took => Literal::Minutes(
-                crate::entry::parse_duration(&value.replace("h", "h ").replace("h  ", "h "))
+                crate::entry::parse_duration(&value.replace('h', "h ").replace("h  ", "h "))
                     .map_err(|_| format!("{value:?} is not a duration - 45m, 2h, 1h30m"))?,
             ),
         };

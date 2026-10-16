@@ -78,7 +78,7 @@ pub fn code_blocks<'a>(events: impl IntoIterator<Item = Event<'a>>) -> Vec<Event
 /// code reference rather than a fenced block. Plain when the extension has no
 /// grammar.
 pub fn file(code: &str, path: &str) -> String {
-    let extension = path.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
+    let extension = path.rsplit_once('.').map_or("", |(_, ext)| ext);
     match syntax_for(extension) {
         Some(syntax) => render(syntax, extension, code),
         None => format!("<pre><code>{}</code></pre>\n", crate::html::escape(code)),

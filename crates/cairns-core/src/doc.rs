@@ -11,6 +11,7 @@ use crate::source::RawEntry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// How much a page is to be believed. The honesty knob: a `solid` page that is
 /// wrong costs more than no page.
@@ -119,7 +120,7 @@ impl Doc {
             content_hash: {
                 let mut out = String::from("sha256:");
                 for byte in Sha256::digest(&raw.bytes) {
-                    out.push_str(&format!("{byte:02x}"));
+                    let _ = write!(out, "{byte:02x}");
                 }
                 out
             },
@@ -146,7 +147,7 @@ impl Doc {
     pub fn slug(&self, root: &str) -> String {
         let inside = self.inside(root);
         let stem = if self.is_index() {
-            inside.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
+            inside.rsplit_once('/').map_or("", |(dir, _)| dir)
         } else {
             inside.strip_suffix(".md").unwrap_or(inside)
         };
@@ -177,8 +178,7 @@ impl Doc {
         if self.is_index() {
             return dir
                 .rsplit_once('/')
-                .map(|(above, _)| above)
-                .unwrap_or("")
+                .map_or("", |(above, _)| above)
                 .to_string();
         }
         dir.to_string()
@@ -217,17 +217,7 @@ fn slug_of(path: &str) -> String {
 /// `Unknowns`, `Still unknown` and `Open questions` are taken as the same.
 pub fn unknown_section(body: &str) -> Option<String> {
     let mut lines = body.lines();
-    lines.find(|line| {
-        let heading = line.trim();
-        let Some(name) = heading.strip_prefix("## ") else {
-            return false;
-        };
-        let name = name.trim().trim_end_matches(':').to_ascii_lowercase();
-        matches!(
-            name.as_str(),
-            "unknown" | "unknowns" | "still unknown" | "open questions"
-        )
-    })?;
+    lines.find(|line| unknown_heading_in(line).is_some())?;
     let section: Vec<&str> = lines
         .take_while(|line| !line.starts_with("## ") && !line.starts_with("# "))
         .collect();
@@ -242,6 +232,26 @@ pub fn unknown_section(body: &str) -> Option<String> {
         .trim();
     let says_nothing = first.eq_ignore_ascii_case("nothing") || first.eq_ignore_ascii_case("none");
     (!text.is_empty() && !says_nothing).then_some(text)
+}
+
+/// The heading of a page's unknowns section, as written - `Unknown`,
+/// `Open questions` - for a link to it.
+pub fn unknown_heading(body: &str) -> Option<&str> {
+    body.lines().find_map(unknown_heading_in)
+}
+
+/// The heading `line` is, if it heads a page's unknowns.
+fn unknown_heading_in(line: &str) -> Option<&str> {
+    let name = line
+        .trim()
+        .strip_prefix("## ")?
+        .trim()
+        .trim_end_matches(':');
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "unknown" | "unknowns" | "still unknown" | "open questions"
+    )
+    .then_some(name)
 }
 
 fn covered(value: &str) -> Vec<Vec<String>> {

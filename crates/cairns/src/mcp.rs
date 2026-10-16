@@ -12,11 +12,12 @@
 //! cover it. It earns its place where there is no shell, and in `resources`,
 //! which let a model pull one entry into context instead of reading the log.
 
-use crate::{read_entries, write_index};
+use crate::project::read_entries;
 use cairns_core::{Config, Log, log};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The protocol version answered when a client offers none. A client that names
 /// one gets it echoed back: this server's surface - tools and resources - has
@@ -27,7 +28,7 @@ const PROTOCOL: &str = "2025-06-18";
 const READ_ONLY_NOTE: &str =
     "This server is read-only. Start it with `cairns mcp --write` to allow writing entries.";
 
-pub fn serve(root: PathBuf, config: Config, writable: bool) -> std::io::Result<()> {
+pub fn serve(root: &Path, config: &Config, writable: bool) -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -50,7 +51,7 @@ pub fn serve(root: PathBuf, config: Config, writable: bool) -> std::io::Result<(
             .unwrap_or_default();
         let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
 
-        let response = match dispatch(&root, &config, writable, method, &params) {
+        let response = match dispatch(root, config, writable, method, &params) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err(failure) => json!({
                 "jsonrpc": "2.0",
@@ -318,14 +319,15 @@ fn call(
             let query = cairns_core::query::parse(&words).map_err(invalid)?;
             let mut out = String::new();
             for entry in built.entries.iter().filter(|e| query.matches(&built, e)) {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "{}. {} ({}, {})\n    {}\n",
                     entry.number,
                     entry.title,
                     entry.date,
                     entry.areas.join(", "),
                     entry.summary.clone().unwrap_or_default()
-                ));
+                );
             }
             Ok(out)
         }
@@ -334,17 +336,17 @@ fn call(
             let number = arguments
                 .get("number")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("`number` is required"))? as u32;
+                .and_then(|number| u32::try_from(number).ok())
+                .ok_or_else(|| invalid("`number` is required: an entry number"))?;
             let built = build(root, config)?;
             let entry = built
-                .entries
-                .iter()
-                .find(|entry| entry.number == number)
+                .entry(number)
                 .ok_or_else(|| invalid(format!("no entry {number}")))?;
 
             let mut out = String::new();
             if !entry.superseded_by.is_empty() {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "NOTE: something claimed here was corrected by entry {}.\n\n",
                     entry
                         .superseded_by
@@ -352,10 +354,11 @@ fn call(
                         .map(u32::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
-                ));
+                );
             }
             if !entry.supersedes.is_empty() {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "This entry corrects entry {}.\n\n",
                     entry
                         .supersedes
@@ -363,7 +366,7 @@ fn call(
                         .map(u32::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
-                ));
+                );
             }
             out.push_str(&entry.body);
             Ok(out)
@@ -387,7 +390,7 @@ fn call(
                 )
                 .to_lowercase();
                 if haystack.contains(&query) {
-                    out.push_str(&format!("{}. {}\n", entry.number, entry.title));
+                    let _ = writeln!(out, "{}. {}", entry.number, entry.title);
                 }
             }
             if out.is_empty() {
@@ -465,166 +468,76 @@ fn call(
     }
 }
 
+/// `worklog_new`: the arguments as a [`crate::write::NewEntry`], written as
+/// `cairns new` writes one.
 fn new_entry(root: &Path, config: &Config, arguments: &Value) -> Result<String, Failure> {
-    let strings = |key: &str| -> Vec<String> {
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    // A list of strings, or of numbers - `resolves: [54, "54.2"]` - as text.
+    let list = |key: &str| -> Vec<String> {
         arguments
             .get(key)
             .and_then(Value::as_array)
             .map(|items| {
                 items
                     .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .map(str::to_string)
+                    .filter_map(|item| match item {
+                        Value::String(text) => Some(text.clone()),
+                        Value::Number(number) => Some(number.to_string()),
+                        _ => None,
+                    })
                     .collect()
             })
             .unwrap_or_default()
     };
-
-    let title = arguments
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .ok_or_else(|| invalid("`title` is required"))?;
-    let areas = strings("area");
-    if areas.is_empty() {
-        return Err(invalid("`area` needs at least one area"));
-    }
-    for area in &areas {
-        if !config.knows_area(area) {
-            let known: Vec<&str> = config.areas.iter().map(|a| a.name.as_str()).collect();
-            return Err(invalid(format!(
-                "unknown area {area:?}; cairns.toml declares {}",
-                known.join(", ")
-            )));
-        }
-    }
-    let body = arguments
-        .get("body")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|body| !body.is_empty())
-        .ok_or_else(|| invalid("`body` is required"))?;
-
-    let dir = root.join(&config.paths.entries);
-    let number = crate::next_number(&dir).map_err(|e| internal(e.to_string()))?;
-    let path = dir.join(format!(
-        "{number:04}-{}.md",
-        cairns_core::entry::slugify(title)
-    ));
-    if path.exists() {
-        return Err(internal(format!("{} already exists", path.display())));
-    }
-
-    let mut front = format!(
-        "---\nnumber: {number}\ntitle: {title}\ndate: {}\narea: {}\n",
-        jiff::Zoned::now().date(),
-        areas.join(", ")
-    );
-    let files = strings("files");
-    if !files.is_empty() {
-        front.push_str(&format!("files: {}\n", files.join(", ")));
-    }
-    let supersedes: Vec<String> = arguments
-        .get("supersedes")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_u64)
-                .map(|n| n.to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-    if !supersedes.is_empty() {
-        front.push_str(&format!("supersedes: {}\n", supersedes.join(", ")));
-    }
-    // The schema has always offered `resolves` and this never wrote it, so a
-    // question closed through MCP stayed open.
-    // An entry number or one question of it, given as a number or a string.
-    let questions = |key: &str| -> Result<Vec<String>, Failure> {
-        arguments
-            .get(key)
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|item| {
-                        let text = match item {
-                            Value::Number(n) => n.to_string(),
-                            Value::String(s) => s.trim().to_string(),
-                            _ => String::new(),
-                        };
-                        text.parse::<cairns_core::entry::QuestionRef>()
-                            .map(|q| q.to_string())
-                            .map_err(|_| {
-                                invalid(format!("`{key}` has {item}: give 54 or \"54.2\""))
-                            })
-                    })
-                    .collect()
-            })
-            .unwrap_or_else(|| Ok(Vec::new()))
-    };
-    for key in ["resolves", "carries"] {
-        let list = questions(key)?;
-        if !list.is_empty() {
-            front.push_str(&format!("{key}: {}\n", list.join(", ")));
-        }
-    }
-    // The clock, as `cairns new` reads it.
-    let clock = crate::clock::read(root).map_err(|e| internal(e.to_string()))?;
-    let took = match arguments
-        .get("took")
-        .and_then(Value::as_str)
-        .filter(|t| !t.trim().is_empty())
-    {
-        Some(given) => Some(cairns_core::entry::parse_duration(given).map_err(invalid)?),
-        None => clock.as_ref().map(crate::clock::Clock::minutes),
-    };
-    if let Some(clock) = &clock {
-        front.push_str(&format!("started: {}\n", clock.started));
-    }
-    if let Some(minutes) = took {
-        front.push_str(&format!(
-            "took: {}\n",
-            cairns_core::entry::format_duration(minutes)
-        ));
-    }
-
+    let body = text("body").ok_or_else(|| invalid("`body` is required"))?;
     // The tool has always closed an entry out when `still_unknown` is absent,
-    // and its schema says so; only a trailer already in the body changes that,
-    // so an entry never ends up with two.
-    let unknown = arguments
-        .get("still_unknown")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let unknown = match unknown {
-        Some(text) => Some(text),
-        None if crate::has_trailer(body) => None,
-        None => Some("nothing"),
+    // and its schema says so; only a trailer already in the body changes
+    // that, so an entry never ends up with two.
+    let unknown = text("still_unknown")
+        .or_else(|| (!crate::write::has_trailer(&body)).then(|| "nothing".to_string()));
+    let supersedes = list("supersedes")
+        .iter()
+        .map(|number| {
+            number
+                .parse::<u32>()
+                .map_err(|_| invalid(format!("`supersedes` has {number:?}, not an entry number")))
+        })
+        .collect::<Result<Vec<u32>, Failure>>()?;
+    let entry = crate::write::NewEntry {
+        title: text("title").unwrap_or_default(),
+        areas: list("area"),
+        files: list("files"),
+        supersedes,
+        resolves: list("resolves"),
+        carries: list("carries"),
+        body: Some(body),
+        unknown,
+        took: text("took"),
+        attach: Vec::new(),
     };
-    let prose = crate::compose_body(Some(body), unknown).map_err(invalid)?;
-
-    std::fs::write(
-        &path,
-        format!("{front}---\n\n# {number}. {title}\n\n{prose}\n"),
-    )
-    .map_err(|e| internal(e.to_string()))?;
-
-    write_index(root, config).map_err(|e| internal(e.to_string()))?;
-    if clock.is_some() {
-        crate::clock::stop(root).map_err(|e| internal(e.to_string()))?;
-    }
-    Ok(match took {
-        Some(minutes) => format!(
-            "wrote entry {number}: {} (took {})",
-            path.display(),
+    let written = crate::write::write(root, config, &entry).map_err(|problem| match problem {
+        crate::write::Problem::Refused(why) => invalid(why),
+        crate::write::Problem::Failed(problem) => internal(problem.to_string()),
+    })?;
+    let mut said = format!("wrote entry {}: {}", written.number, written.path.display());
+    if let Some(minutes) = written.took {
+        let _ = write!(
+            said,
+            " (took {})",
             cairns_core::entry::format_duration(minutes)
-        ),
-        None => format!("wrote entry {number}: {}", path.display()),
-    })
+        );
+    }
+    for warning in &written.warnings {
+        let _ = write!(said, "\n{warning}");
+    }
+    Ok(said)
 }
 
 fn resource(root: &Path, config: &Config, uri: &str) -> Result<(&'static str, String), Failure> {
@@ -635,7 +548,7 @@ fn resource(root: &Path, config: &Config, uri: &str) -> Result<(&'static str, St
             cairns_site::render_index(
                 &built,
                 config.index.header.as_deref(),
-                crate::published(config),
+                crate::project::published(config),
             ),
         )),
         "worklog://open" => Ok((
@@ -657,9 +570,7 @@ fn resource(root: &Path, config: &Config, uri: &str) -> Result<(&'static str, St
                 .and_then(|rest| rest.parse().ok())
                 .ok_or_else(|| invalid(format!("no resource {uri:?}")))?;
             built
-                .entries
-                .iter()
-                .find(|entry| entry.number == number)
+                .entry(number)
                 .map(|entry| ("text/markdown", entry.body.clone()))
                 .ok_or_else(|| invalid(format!("no entry {number}")))
         }
@@ -678,13 +589,13 @@ mod tests {
         .unwrap()
     }
 
-    fn call(method: &str, params: Value, writable: bool) -> Result<Value, Failure> {
+    fn call(method: &str, params: &Value, writable: bool) -> Result<Value, Failure> {
         dispatch(
             Path::new("/nonexistent"),
             &config(),
             writable,
             method,
-            &params,
+            params,
         )
     }
 
@@ -694,21 +605,21 @@ mod tests {
         // working session; the surface used here does not change between them.
         let result = call(
             "initialize",
-            json!({ "protocolVersion": "2099-01-01" }),
+            &json!({ "protocolVersion": "2099-01-01" }),
             false,
         )
         .unwrap();
         assert_eq!(result["protocolVersion"], "2099-01-01");
         assert_eq!(result["serverInfo"]["name"], "cairns");
 
-        let bare = call("initialize", json!({}), false).unwrap();
+        let bare = call("initialize", &json!({}), false).unwrap();
         assert_eq!(bare["protocolVersion"], PROTOCOL);
     }
 
     #[test]
     fn writing_is_absent_from_the_tool_list_until_it_is_allowed() {
         let names = |writable| {
-            let result = call("tools/list", json!({}), writable).unwrap();
+            let result = call("tools/list", &json!({}), writable).unwrap();
             result["tools"]
                 .as_array()
                 .unwrap()
@@ -725,7 +636,7 @@ mod tests {
     fn a_read_only_server_refuses_to_write_and_says_how_to_change_that() {
         let result = call(
             "tools/call",
-            json!({ "name": "worklog_new", "arguments": { "title": "t", "area": ["spec"], "body": "b" } }),
+            &json!({ "name": "worklog_new", "arguments": { "title": "t", "area": ["spec"], "body": "b" } }),
             false,
         )
         .unwrap();
@@ -736,7 +647,7 @@ mod tests {
 
     #[test]
     fn the_new_entry_tool_offers_only_the_areas_this_project_declares() {
-        let result = call("tools/list", json!({}), true).unwrap();
+        let result = call("tools/list", &json!({}), true).unwrap();
         let new = result["tools"]
             .as_array()
             .unwrap()
@@ -751,10 +662,10 @@ mod tests {
     fn an_unknown_method_is_a_protocol_error_but_an_unknown_tool_is_not() {
         // The distinction matters: a model should read a bad tool name and try
         // again, where a bad method means the client and server disagree.
-        let failure = call("bogus/method", json!({}), false).unwrap_err();
+        let failure = call("bogus/method", &json!({}), false).unwrap_err();
         assert_eq!(failure.code, -32601);
 
-        let result = call("tools/call", json!({ "name": "nope" }), false).unwrap();
+        let result = call("tools/call", &json!({ "name": "nope" }), false).unwrap();
         assert_eq!(result["isError"], true);
     }
 }

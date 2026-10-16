@@ -5,10 +5,114 @@
 //! and body - is a page whose front matter is right. Editing the evidence list
 //! by hand is the step that goes wrong, so `cite` does it.
 
+use crate::Result;
 use cairns_core::{Config, Doc, Status};
+use clap::Subcommand;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+/// `cairns doc`'s own commands.
+#[derive(Subcommand)]
+pub enum Command {
+    /// Write a new reference page and print its path.
+    New {
+        title: String,
+        /// The section (directory under the docs root) it goes in.
+        #[arg(long = "in")]
+        section: Option<String>,
+        /// How far it can be trusted: solid, partial or guess.
+        #[arg(long)]
+        status: Option<String>,
+        /// The entries that established it.
+        #[arg(long, value_delimiter = ',')]
+        from: Vec<u32>,
+        /// Other front matter, `key=value`, once per key: `--set volumes=INF,MUT`.
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// The page, as markdown, or `-` to read it from stdin.
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Add entries to a page's evidence.
+    Cite {
+        /// The page: `formats/pod`, `formats/pod.md` or `docs/formats/pod.md`.
+        page: String,
+        /// Entry numbers, or `name:12` for an entry in another worklog.
+        #[arg(required = true, value_delimiter = ',')]
+        entries: Vec<String>,
+        /// Cite them under this heading of the page, not for the whole page.
+        #[arg(long)]
+        section: Option<String>,
+    },
+    /// Every page with its status and evidence, and what needs looking at.
+    List {
+        /// Fail if any page needs looking at - for CI, the way `check` guards
+        /// the log.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Regenerate the reference's index pages - every README.md carrying
+    /// `<!-- cairns:index -->` - and write the root's if there is none.
+    Index,
+}
+
+/// Run one of them.
+pub fn run(root: &Path, config: &Config, action: Command) -> Result<()> {
+    match action {
+        Command::New {
+            title,
+            section,
+            status,
+            from,
+            set,
+            body,
+        } => {
+            let body = crate::write::read_body(body)?;
+            new(
+                root,
+                config,
+                NewPage {
+                    title: &title,
+                    section: section.as_deref(),
+                    status: status.as_deref(),
+                    from: &from,
+                    set: &set,
+                    body,
+                },
+            )?;
+            crate::project::write_index(root, config)?;
+        }
+        Command::Cite {
+            page,
+            entries,
+            section,
+        } => {
+            cite(root, config, &page, &entries, section.as_deref())?;
+            crate::project::write_index(root, config)?;
+        }
+        Command::Index => {
+            let built = crate::project::index_log(root, config)?;
+            let written = write_indexes(root, config, &built, true)?;
+            if written.is_empty() {
+                println!("reference index current");
+            }
+            for path in written {
+                println!("-> {path}");
+            }
+        }
+        Command::List { strict } => {
+            let flagged = list(root, config)?;
+            if strict && flagged > 0 {
+                return Err(format!(
+                    "{flagged} {} to look at",
+                    if flagged == 1 { "page" } else { "pages" }
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
 
 fn docs_dir(config: &Config) -> Result<&str> {
     config
@@ -42,8 +146,7 @@ pub fn stale_because(found: &str, wanted: &str) -> String {
     let rows = |text: &str| -> std::collections::BTreeMap<String, String> {
         let listing = text
             .find(cairns_site::reference::MARKER)
-            .map(|at| &text[at..])
-            .unwrap_or("");
+            .map_or("", |at| &text[at..]);
         listing
             .lines()
             .filter(|line| line.starts_with("| ["))
@@ -202,9 +305,9 @@ pub fn problems(root: &Path, config: &Config, docs: &[Doc]) -> Vec<String> {
         // A dead link in a reference page sends the reader looking for a page
         // that was renamed or never written. Only pages: an entry is never
         // edited, so a link in one that has since gone stale stays as written.
-        let from = doc.path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+        let from = doc.path.rsplit_once('/').map_or("", |(dir, _)| dir);
         for target in cairns_site::html::link_targets(&doc.body) {
-            let Some(path) = local_target(from, &target) else {
+            let Some(path) = cairns_site::html::repo_path(from, &target) else {
                 continue;
             };
             if !root.join(&path).exists() {
@@ -216,40 +319,6 @@ pub fn problems(root: &Path, config: &Config, docs: &[Doc]) -> Vec<String> {
         }
     }
     problems
-}
-
-/// A link's target as a path from the repository root, when it is a file in
-/// the repository at all: not a URL, an anchor, or a path from the site root.
-fn local_target(from: &str, target: &str) -> Option<String> {
-    let outside = target.is_empty()
-        || target.starts_with('#')
-        || target.starts_with('/')
-        || target.contains("://")
-        || target.starts_with("mailto:")
-        || target.starts_with("cairns:");
-    if outside {
-        return None;
-    }
-    let path = target
-        .split(['#', '?'])
-        .next()
-        .unwrap_or("")
-        .replace("%20", " ");
-    if path.is_empty() {
-        return None;
-    }
-    let mut parts: Vec<&str> = from.split('/').filter(|part| !part.is_empty()).collect();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                // Above the repository is not somewhere a page can link to.
-                parts.pop()?;
-            }
-            part => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
 }
 
 /// Write a new page and print its path.
@@ -349,13 +418,13 @@ pub fn new(root: &Path, config: &Config, page: NewPage<'_>) -> Result<()> {
 
     let mut front = format!("---\ntitle: {title}\n");
     if let Some(status) = status {
-        front.push_str(&format!("status: {}\n", status.name()));
+        let _ = writeln!(front, "status: {}", status.name());
     }
     if !from.is_empty() {
-        front.push_str(&format!("worklog: {}\n", numbers(from)));
+        let _ = writeln!(front, "worklog: {}", numbers(from));
     }
     for (key, value) in &fields {
-        front.push_str(&format!("{key}: {value}\n"));
+        let _ = writeln!(front, "{key}: {value}");
     }
     front.push_str("---\n\n");
 
@@ -363,14 +432,7 @@ pub fn new(root: &Path, config: &Config, page: NewPage<'_>) -> Result<()> {
         let body = body.trim();
         // The command writes the heading; a body that brings its own would
         // give the page two.
-        match body.strip_prefix("# ") {
-            Some(rest) => rest
-                .split_once('\n')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or(""),
-            None => body,
-        }
-        .to_string()
+        cairns_core::entry::without_title(body).trim().to_string()
     });
     let text = match body.as_deref() {
         Some(body) if !body.is_empty() => format!("{front}# {title}\n\n{body}\n"),
@@ -450,15 +512,14 @@ fn with_citations(text: &str, cited: &[String], path: &Path) -> Result<(String, 
         let title = text
             .lines()
             .find_map(|line| line.strip_prefix("# "))
-            .map(str::trim)
-            .unwrap_or("")
+            .map_or("", str::trim)
             .to_string();
         let mut front = String::from("---\n");
         if !title.is_empty() {
-            front.push_str(&format!("title: {title}\n"));
+            let _ = writeln!(front, "title: {title}");
         }
         let all = merged("", cited);
-        front.push_str(&format!("worklog: {}\n---\n\n", all.join(", ")));
+        let _ = write!(front, "worklog: {}\n---\n\n", all.join(", "));
         return Ok((format!("{front}{text}"), all));
     };
     let end = rest
@@ -518,12 +579,11 @@ fn with_section_citations(
         )
         .into());
     };
-    let mut out: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let mut out: Vec<String> = lines.iter().map(std::string::ToString::to_string).collect();
     let section_end = lines[at + 1..]
         .iter()
         .position(|line| line.starts_with('#'))
-        .map(|offset| at + 1 + offset)
-        .unwrap_or(lines.len());
+        .map_or(lines.len(), |offset| at + 1 + offset);
     let comment = (at + 1..section_end).find(|&i| {
         let line = lines[i].trim();
         line.starts_with("<!--") && line.ends_with("-->") && line.contains("worklog:")
@@ -556,14 +616,12 @@ fn with_section_citations(
 /// Returns how many pages were flagged, so `--strict` can fail on them.
 pub fn list(root: &Path, config: &Config) -> Result<usize> {
     let dir = docs_dir(config)?;
-    let entries = crate::read_entries(root, config)?;
-    let docs = crate::read_docs(root, config)?;
-    let built = cairns_core::Log::build_with(config, entries, docs.clone(), None);
+    let entries = crate::project::read_entries(root, config)?;
+    let docs = crate::project::read_docs(root, config)?;
+    let built = cairns_core::Log::build_with(config, entries, &docs, None);
     let corrected = |number: u32| {
         built
-            .entries
-            .iter()
-            .find(|entry| entry.number == number)
+            .entry(number)
             .map(|entry| entry.superseded_by.clone())
             .unwrap_or_default()
     };
@@ -582,7 +640,7 @@ pub fn list(root: &Path, config: &Config) -> Result<usize> {
         .unwrap_or(0);
     let mut flagged = 0;
     for doc in &pages {
-        let status = doc.status.map(Status::name).unwrap_or("-");
+        let status = doc.status.map_or("-", Status::name);
         let cites = match doc.worklog.len() {
             0 => String::from("-"),
             _ => numbers(&doc.worklog),
@@ -648,7 +706,7 @@ pub fn list(root: &Path, config: &Config) -> Result<usize> {
 /// (`formats/pod.md`), or its path from the repository root.
 fn find_page(root: &Path, config: &Config, dir: &str, page: &str) -> Result<PathBuf> {
     let wanted = page.trim().trim_matches('/');
-    let docs = crate::read_docs(root, config)?;
+    let docs = crate::project::read_docs(root, config)?;
     let found = docs.iter().find(|doc| {
         let slug = doc.slug(dir);
         slug == wanted
@@ -686,7 +744,7 @@ fn check_entries_exist(root: &Path, config: &Config, wanted: &[u32]) -> Result<(
     if wanted.is_empty() {
         return Ok(());
     }
-    let entries = crate::read_entries(root, config)?;
+    let entries = crate::project::read_entries(root, config)?;
     let missing: Vec<u32> = wanted
         .iter()
         .copied()
@@ -709,7 +767,8 @@ fn numbers(values: &[u32]) -> String {
 
 #[cfg(test)]
 mod link_tests {
-    use super::{local_target, problems};
+    use super::problems;
+    use cairns_site::html::repo_path as local_target;
 
     #[test]
     fn check_holds_pages_to_what_the_project_declared() {
@@ -812,7 +871,7 @@ mod tests {
     fn a_section_is_cited_under_its_heading() {
         let text = "---\ntitle: X\n---\n\n# X\n\n## Layout\n\nBody.\n\n## Index\n<!-- worklog: 4 -->\nMore.\n";
         let cite = |text: &str, heading: &str, add: &[&str]| {
-            let add: Vec<String> = add.iter().map(|s| s.to_string()).collect();
+            let add: Vec<String> = add.iter().map(std::string::ToString::to_string).collect();
             with_section_citations(text, heading, &add)
         };
         let (once, _) = cite(text, "layout", &["12", "piney:3"]).unwrap();

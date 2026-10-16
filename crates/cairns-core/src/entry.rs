@@ -4,6 +4,7 @@ use crate::source::RawEntry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// The longest a derived slug may be, in characters, before it is cut back to a
 /// word boundary. The slug is the URL, so it is cut kindly.
@@ -371,7 +372,7 @@ pub fn question_items(trailer: &str) -> (String, Vec<String>) {
         .into_iter()
         .map(|lines| {
             let first = lines[0];
-            let marker = first.find(' ').map(|at| at + 1).unwrap_or(0);
+            let marker = first.find(' ').map_or(0, |at| at + 1);
             let mut text = first[marker..].to_string();
             for line in &lines[1..] {
                 text.push('\n');
@@ -457,6 +458,17 @@ fn list(value: &str) -> Vec<String> {
 
 /// Title to URL segment: ASCII, lower case, hyphenated, and cut back to a word
 /// boundary rather than mid-word at exactly [`MAX_SLUG`].
+/// `text` without the `# Title` line it opens with, when it opens with one -
+/// an entry's or a page's own heading, which whatever shows it shows already,
+/// and which whoever hands a body over most often brings along.
+pub fn without_title(text: &str) -> &str {
+    let text = text.trim_start();
+    match text.strip_prefix("# ") {
+        Some(rest) => rest.split_once('\n').map_or("", |(_, rest)| rest),
+        None => text,
+    }
+}
+
 pub fn slugify(title: &str) -> String {
     let mut out = String::new();
     for ch in title.chars() {
@@ -506,7 +518,7 @@ fn hash(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::from("sha256:");
     for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -919,7 +931,7 @@ pub fn rewrite_references(body: &str, link: &dyn Fn(&Reference) -> Option<String
                         Some(workspace) => format!("{workspace}:{}", reference.number),
                         None => reference.number.to_string(),
                     });
-                out.push_str(&format!("[{label}]({destination})"));
+                let _ = write!(out, "[{label}]({destination})");
             }
             None => out.push_str(whole),
         },
@@ -1008,11 +1020,10 @@ impl CodeRef {
             key.push('#');
             key.push_str(symbol);
         } else if let Some((start, end)) = self.lines {
-            key.push_str(&if start == end {
-                format!(":{start}")
-            } else {
-                format!(":{start}-{end}")
-            });
+            let _ = write!(key, ":{start}");
+            if start != end {
+                let _ = write!(key, "-{end}");
+            }
         }
         if let Some(rev) = &self.rev {
             key.push('@');
