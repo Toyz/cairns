@@ -1,7 +1,7 @@
 ---
 title: cairns.toml
 status: solid
-worklog: 1, 36, 37, 38, 39
+worklog: 1, 36, 37, 38, 39, 41
 spec_version: 1
 ---
 
@@ -324,8 +324,9 @@ column   = true                                 # shown in the index; the defaul
 `required` applies to the built-in keys too - `status`, `worklog`, `covers` -
 which is how a project insists every page says how far it can be trusted.
 `check` also reports a `status` that is not one of the three, and a relative
-link in a page to a file that does not exist; entries are left out of that,
-since one is never edited to fix it. `cairns doc new --set volumes=INF` writes
+link in a page to a file that does not exist; an entry's links are left out
+of that, since one is never edited to fix it. Its images are not - see
+[the entry](entry.md#attachments). `cairns doc new --set volumes=INF` writes
 a field, and refuses a value `values` does not allow.
 
 ### The generated index

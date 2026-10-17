@@ -35,6 +35,17 @@ pub fn link_targets(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Where a page's images come from, as written - its links' targets without
+/// the links that only go somewhere.
+pub fn image_targets(text: &str) -> Vec<String> {
+    Parser::new_ext(text, options())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The prose alone: the entry's own `# N. Title` and its open-question trailer
 /// are rendered by the page, in their own places, so they are cut from here
 /// rather than appearing twice.
@@ -142,7 +153,9 @@ impl Links<'_> {
         // Everything is decided on the repo-root path the link points at, so
         // `entry.md`, `../spec/entry.md` and `docs/spec/entry.md` all land in
         // the same place from wherever they were written.
-        let target = from_repo_root(self.from_dir, path);
+        let Some(target) = from_repo_root(self.from_dir, path) else {
+            return url.to_string();
+        };
 
         // A file kept with an entry, in the folder named like it, is served
         // beside the entry's page.
@@ -195,7 +208,6 @@ impl Links<'_> {
     }
 }
 
-/// A path written inside an entry, as a path from the repository root.
 /// A link that is not to a file in the repository: a URL, an address, a link
 /// to a place on the same page.
 pub(crate) fn leaves_repository(url: &str) -> bool {
@@ -222,37 +234,23 @@ pub fn repo_path(from_dir: &str, url: &str) -> Option<String> {
     if path.is_empty() {
         return None;
     }
-    let mut parts: Vec<&str> = from_dir
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
+    from_repo_root(from_dir, &path)
+}
+
+/// A path written inside a page in `dir`, as a path from the repository root -
+/// none when it climbs above the root, where nothing of the repository is.
+pub(crate) fn from_repo_root(dir: &str, path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
     for part in path.split('/') {
         match part {
             "" | "." => {}
             ".." => {
                 parts.pop()?;
             }
-            part => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
-}
-
-pub(crate) fn from_repo_root(entry_dir: &str, path: &str) -> String {
-    let mut parts: Vec<&str> = entry_dir
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
             name => parts.push(name),
         }
     }
-    parts.join("/")
+    Some(parts.join("/"))
 }
 
 /// Where the entries live, taken from the paths in the document itself rather
@@ -260,8 +258,7 @@ pub(crate) fn from_repo_root(entry_dir: &str, path: &str) -> String {
 pub(crate) fn entry_dir(log: &Log) -> &str {
     log.entries
         .first()
-        .and_then(|entry| entry.path.rsplit_once('/'))
-        .map_or("", |(dir, _)| dir)
+        .map_or("", |entry| cairns_core::dir_of(&entry.path))
 }
 
 /// One heading in an entry: its depth, its words, and the anchor it gets.
@@ -478,18 +475,26 @@ mod tests {
 
     #[test]
     fn a_link_out_of_the_entries_directory_lands_at_the_repository_root() {
+        let at = |dir, path| from_repo_root(dir, path);
         assert_eq!(
-            from_repo_root("worklog", "../docs/spec/entry.md"),
-            "docs/spec/entry.md"
+            at("worklog", "../docs/spec/entry.md").as_deref(),
+            Some("docs/spec/entry.md")
         );
-        assert_eq!(from_repo_root("worklog", "../README.md"), "README.md");
+        assert_eq!(at("worklog", "../README.md").as_deref(), Some("README.md"));
         // No `../` means a path inside the entries directory, which is what a
         // relative link in that file actually means.
-        assert_eq!(from_repo_root("worklog", "notes.md"), "worklog/notes.md");
-        assert_eq!(from_repo_root("worklog", "./notes.md"), "worklog/notes.md");
         assert_eq!(
-            from_repo_root("log/entries", "../../docs/x.md"),
-            "docs/x.md"
+            at("worklog", "notes.md").as_deref(),
+            Some("worklog/notes.md")
         );
+        assert_eq!(
+            at("worklog", "./notes.md").as_deref(),
+            Some("worklog/notes.md")
+        );
+        assert_eq!(
+            at("log/entries", "../../docs/x.md").as_deref(),
+            Some("docs/x.md")
+        );
+        assert_eq!(at("worklog", "../../outside.md"), None);
     }
 }

@@ -21,6 +21,11 @@ pub mod source;
 /// The spec version this crate reads and writes. See `docs/spec/README.md`.
 pub const SPEC_VERSION: u32 = 1;
 
+/// The directory a `/`-separated path is in: `""` for one at the top.
+pub fn dir_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
+}
+
 pub use config::Config;
 pub use date::{Date, rfc3339};
 pub use doc::{Doc, Status};

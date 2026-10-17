@@ -305,7 +305,7 @@ pub fn problems(root: &Path, config: &Config, docs: &[Doc]) -> Vec<String> {
         // A dead link in a reference page sends the reader looking for a page
         // that was renamed or never written. Only pages: an entry is never
         // edited, so a link in one that has since gone stale stays as written.
-        let from = doc.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let from = cairns_core::dir_of(&doc.path);
         for target in cairns_site::html::link_targets(&doc.body) {
             let Some(path) = cairns_site::html::repo_path(from, &target) else {
                 continue;
@@ -319,6 +319,30 @@ pub fn problems(root: &Path, config: &Config, docs: &[Doc]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// The images in entries that show nothing. Unlike a link, an image is part
+/// of the entry - kept in its own folder - so one that is gone was mistyped or
+/// deleted, and the fix is the file, not the entry.
+pub fn image_problems(root: &Path, entries: &[cairns_core::Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .flat_map(|entry| missing_images(root, &entry.path, &entry.body))
+        .collect()
+}
+
+/// The images in one page's `body` that are not in the repository, as
+/// problems with the page at `path`.
+pub fn missing_images(root: &Path, path: &str, body: &str) -> Vec<String> {
+    let from = cairns_core::dir_of(path);
+    cairns_site::html::image_targets(body)
+        .into_iter()
+        .filter(|target| {
+            cairns_site::html::repo_path(from, target)
+                .is_some_and(|file| !root.join(file).is_file())
+        })
+        .map(|target| format!("{path}: shows {target}, which does not exist"))
+        .collect()
 }
 
 /// Write a new page and print its path.
@@ -618,34 +642,35 @@ pub fn list(root: &Path, config: &Config) -> Result<usize> {
     let dir = docs_dir(config)?;
     let entries = crate::project::read_entries(root, config)?;
     let docs = crate::project::read_docs(root, config)?;
-    let built = cairns_core::Log::build_with(config, entries, &docs, None);
+    // Built for what corrected what, which the entries alone decide.
+    let built = cairns_core::Log::build_with(config, entries, &[], None);
     let corrected = |number: u32| {
         built
             .entry(number)
-            .map(|entry| entry.superseded_by.clone())
+            .map(|entry| entry.superseded_by.as_slice())
             .unwrap_or_default()
     };
 
-    let mut pages: Vec<&Doc> = docs.iter().filter(|doc| !doc.is_index()).collect();
-    pages.sort_by_key(|doc| doc.slug(dir));
+    let mut pages: Vec<(String, &Doc)> = docs
+        .iter()
+        .filter(|doc| !doc.is_index())
+        .map(|doc| (doc.slug(dir), doc))
+        .collect();
+    pages.sort_by(|(a, _), (b, _)| a.cmp(b));
     if pages.is_empty() {
         println!("no pages under {dir}/ - `cairns doc new` writes one");
         return Ok(0);
     }
 
-    let width = pages
-        .iter()
-        .map(|doc| doc.slug(dir).len())
-        .max()
-        .unwrap_or(0);
+    let width = pages.iter().map(|(slug, _)| slug.len()).max().unwrap_or(0);
     let mut flagged = 0;
-    for doc in &pages {
+    for (slug, doc) in &pages {
         let status = doc.status.map_or("-", Status::name);
         let cites = match doc.worklog.len() {
             0 => String::from("-"),
             _ => numbers(&doc.worklog),
         };
-        println!("{status:<8} {:<width$}  {cites}", doc.slug(dir));
+        println!("{status:<8} {slug:<width$}  {cites}");
 
         let mut notes = Vec::new();
         if doc.worklog.is_empty() {
@@ -657,7 +682,8 @@ pub fn list(root: &Path, config: &Config) -> Result<usize> {
         // likely brought up to date at the time.
         for number in &doc.worklog {
             let later: Vec<u32> = corrected(*number)
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|n| !doc.worklog.contains(n))
                 .collect();
             if !later.is_empty() {
@@ -689,7 +715,7 @@ pub fn list(root: &Path, config: &Config) -> Result<usize> {
     let count = |status: Status| {
         pages
             .iter()
-            .filter(|doc| doc.status == Some(status))
+            .filter(|(_, doc)| doc.status == Some(status))
             .count()
     };
     println!(
@@ -767,8 +793,28 @@ fn numbers(values: &[u32]) -> String {
 
 #[cfg(test)]
 mod link_tests {
-    use super::problems;
+    use super::{missing_images, problems};
     use cairns_site::html::repo_path as local_target;
+
+    #[test]
+    fn an_image_that_shows_nothing_is_a_problem_and_a_link_is_not() {
+        let root = std::env::temp_dir().join(format!("cairns-images-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("worklog/0001-a")).unwrap();
+        std::fs::write(root.join("worklog/0001-a/shot.png"), "").unwrap();
+        let body = "![kept](0001-a/shot.png) ![typo](0001-a/shto.png) \
+                    ![folder](0001-a) ![web](https://x.example/i.png) \
+                    [stale link](gone.md) `![code](no.png)`";
+        let found = missing_images(&root, "worklog/0001-a.md", body);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            found,
+            [
+                "worklog/0001-a.md: shows 0001-a/shto.png, which does not exist",
+                "worklog/0001-a.md: shows 0001-a, which does not exist",
+            ],
+        );
+    }
 
     #[test]
     fn check_holds_pages_to_what_the_project_declared() {

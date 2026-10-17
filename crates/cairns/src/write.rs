@@ -7,7 +7,7 @@
 //! [`NewEntry`] and says what came back.
 
 use crate::project::{next_number, write_index};
-use crate::{Result, clock, code};
+use crate::{Result, clock, code, doc};
 use cairns_core::Config;
 use cairns_core::entry::{QuestionRef, format_duration, parse_duration, slugify};
 use std::fmt::Write as _;
@@ -228,6 +228,10 @@ pub fn write(
                 .map(|why| format!("{} - {why}", code.key()))
         })
         .collect();
+    // An image that shows nothing, while the entry is still being written:
+    // `cairns check` would refuse it at the next commit.
+    let written = format!("{}/{stem}.md", config.paths.entries.trim_end_matches('/'));
+    warnings.extend(doc::missing_images(root, &written, &prose));
     if clock.is_some() {
         clock::stop(root)?;
         // Wall-clock includes every break. Past a working day it almost

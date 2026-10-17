@@ -290,16 +290,9 @@ pub fn resolve_icon(root: &Path, path: &str) -> Result<String, String> {
             let text = String::from_utf8(bytes).map_err(|_| "is not UTF-8 text".to_string())?;
             return cairns_site::icon::clean_svg(&text);
         }
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "ico" => "image/x-icon",
-        other => {
-            return Err(format!(
-                "is a .{other} file; an icon is .svg, .png, .jpg, .gif, .webp or .ico"
-            ));
-        }
+        other => crate::serve::image_type(other).ok_or_else(|| {
+            format!("is a .{other} file; an icon is .svg, .png, .jpg, .gif, .webp or .ico")
+        })?,
     };
     // Icons are small; one that is not is a mistake worth saying out loud,
     // since it is copied into every page.

@@ -156,7 +156,7 @@ pub fn dispatch(
                 resources.push(json!({
                     "uri": format!("worklog://entry/{}", entry.number),
                     "name": format!("{}. {}", entry.number, entry.title),
-                    "description": entry.summary.clone().unwrap_or_default(),
+                    "description": entry.summary.as_deref().unwrap_or(""),
                     "mimeType": "text/markdown",
                 }));
             }
@@ -326,7 +326,7 @@ fn call(
                     entry.title,
                     entry.date,
                     entry.areas.join(", "),
-                    entry.summary.clone().unwrap_or_default()
+                    entry.summary.as_deref().unwrap_or("")
                 );
             }
             Ok(out)
@@ -384,7 +384,7 @@ fn call(
                 let haystack = format!(
                     "{} {} {} {}",
                     entry.title,
-                    entry.summary.clone().unwrap_or_default(),
+                    entry.summary.as_deref().unwrap_or(""),
                     entry.areas.join(" "),
                     entry.body
                 )

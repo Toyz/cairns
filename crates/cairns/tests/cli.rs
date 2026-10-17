@@ -409,6 +409,44 @@ fn a_build_writes_the_site_and_the_document() {
 }
 
 #[test]
+fn an_attached_image_is_built_beside_its_page_and_a_missing_one_is_reported() {
+    let log = Project::new();
+    log.write("shot.png", "png");
+    let out = log.run(&[
+        "new",
+        "One",
+        "--area",
+        "spec",
+        "--attach",
+        "shot.png",
+        "--body",
+        "![kept](shot.png) ![typo](0001-one/shto.png)",
+        "--unknown",
+        "nothing",
+    ]);
+    assert!(out.status.success());
+    let warned = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        warned.contains("worklog/0001-one.md: shows 0001-one/shto.png, which does not exist"),
+        "{warned}"
+    );
+    assert!(!warned.contains("shot.png,"), "{warned}");
+
+    log.ok(&["build", "--out", "site"]);
+    assert_eq!(log.read("site/1-one/shot.png"), "png");
+    assert!(
+        log.read("site/1-one/index.html")
+            .contains("src=\"../1-one/shot.png\""),
+        "the image does not point at its copy"
+    );
+
+    let problem = log.fails(&["check"]);
+    assert!(problem.contains("shows 0001-one/shto.png"), "{problem}");
+    log.write("worklog/0001-one/shto.png", "png");
+    log.ok(&["check"]);
+}
+
+#[test]
 fn init_writes_a_project_and_update_keeps_what_is_hand_written() {
     let log = Project::with("");
     log.ok(&["init"]);

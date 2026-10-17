@@ -13,14 +13,15 @@ use std::path::Path;
 /// tracked by git when it is one, walked otherwise - leaving out the log, its
 /// index and the reference, whose links the log already knows.
 pub fn scan(root: &Path, config: &cairns_core::Config) -> BTreeMap<u32, Vec<CodeMention>> {
-    let entries_dir = config.paths.entries.trim_end_matches('/').to_string();
+    let entries_dir = config.paths.entries.trim_end_matches('/');
+    let entries_prefix = format!("{entries_dir}/");
+    let docs_prefix = config.docs.as_ref().map(|docs| format!("{}/", docs.dir));
     let skip = |path: &str| {
-        path.starts_with(&format!("{entries_dir}/"))
+        path.starts_with(&entries_prefix)
             || path == config.paths.index
-            || config
-                .docs
-                .as_ref()
-                .is_some_and(|docs| path.starts_with(&format!("{}/", docs.dir)))
+            || docs_prefix
+                .as_deref()
+                .is_some_and(|prefix| path.starts_with(prefix))
             || path.starts_with(".cairns/")
             || path.starts_with(".claude/")
     };
@@ -46,7 +47,7 @@ pub fn scan(root: &Path, config: &cairns_core::Config) -> BTreeMap<u32, Vec<Code
             if line.trim_start().starts_with("worklog:") {
                 continue;
             }
-            for number in mentions(line, &entries_dir) {
+            for number in mentions(line, entries_dir) {
                 found.entry(number).or_default().push(CodeMention {
                     path: path.clone(),
                     line: crate::code::line_number(at + 1),

@@ -208,20 +208,32 @@ fn with_reload(page: &[u8]) -> Vec<u8> {
 }
 
 fn mime(path: &str) -> &'static str {
-    match Path::new(path).extension().and_then(|ext| ext.to_str()) {
-        Some("html") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
-        Some("xml") => "application/atom+xml; charset=utf-8",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("woff2") => "font/woff2",
-        _ => "application/octet-stream",
+    let Some(extension) = Path::new(path).extension().and_then(|ext| ext.to_str()) else {
+        return "application/octet-stream";
+    };
+    match extension {
+        "html" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "xml" => "application/atom+xml; charset=utf-8",
+        "woff2" => "font/woff2",
+        // An attachment is named by whoever took it: `Shot.PNG` is an image.
+        other => image_type(other).unwrap_or("application/octet-stream"),
     }
+}
+
+/// An image's media type, by its file's extension in any case.
+pub fn image_type(extension: &str) -> Option<&'static str> {
+    Some(match extension.to_ascii_lowercase().as_str() {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
 }
 
 fn write(

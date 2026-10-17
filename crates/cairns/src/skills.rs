@@ -23,7 +23,8 @@ pub fn init(hooks: bool) -> Result<()> {
         println!("cairns.toml is already here, keeping it");
     }
 
-    let config = &Config::parse(&std::fs::read_to_string(&config_path)?)?;
+    let raw = std::fs::read_to_string(&config_path)?;
+    let config = &Config::parse(&raw)?;
     std::fs::create_dir_all(root.join(&config.paths.entries))?;
 
     write_skills(root, config)?;
@@ -44,7 +45,6 @@ pub fn init(hooks: bool) -> Result<()> {
             )
         })
         .count();
-    let raw = std::fs::read_to_string(&config_path)?;
     if silent > 0 && !raw.contains("[check]") {
         std::fs::write(
             &config_path,

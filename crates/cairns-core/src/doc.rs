@@ -147,7 +147,7 @@ impl Doc {
     pub fn slug(&self, root: &str) -> String {
         let inside = self.inside(root);
         let stem = if self.is_index() {
-            inside.rsplit_once('/').map_or("", |(dir, _)| dir)
+            crate::dir_of(inside)
         } else {
             inside.strip_suffix(".md").unwrap_or(inside)
         };
@@ -171,15 +171,9 @@ impl Doc {
         let inside = self.inside(root);
         // A directory's index belongs to the directory *above* it, the way a
         // chapter title belongs to the book rather than to the chapter.
-        let dir = match inside.rsplit_once('/') {
-            Some((dir, _)) => dir,
-            None => "",
-        };
+        let dir = crate::dir_of(inside);
         if self.is_index() {
-            return dir
-                .rsplit_once('/')
-                .map_or("", |(above, _)| above)
-                .to_string();
+            return crate::dir_of(dir).to_string();
         }
         dir.to_string()
     }

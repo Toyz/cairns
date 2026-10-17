@@ -14,6 +14,7 @@ pub fn run(root: &Path, config: &Config, fix: bool) -> Result<bool> {
     let mut problems = log::problems(config, &entries);
     problems.extend(log::doc_problems(&entries, &docs));
     problems.extend(doc::problems(root, config, &docs));
+    problems.extend(doc::image_problems(root, &entries));
     problems.extend(workspace::problems(root, config, &entries, &docs));
 
     // An icon name that is not built in renders nothing. That is the

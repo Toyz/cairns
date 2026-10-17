@@ -34,6 +34,7 @@ number are listed rather than changed - after a merge, `[[34]]` elsewhere may
 mean either entry, and only someone who knows which can say.
 
 ## Attachments
+<!-- worklog: 41 -->
 
 Files kept with an entry - a screenshot, a capture - go in a folder named like
 it, beside it:
@@ -48,6 +49,11 @@ which is also what renders on a forge. The site serves them beside the entry's
 page. `cairns new --attach screenshot.png` copies a file in and points the
 body's `](screenshot.png)` at it, since the number is not known until the
 entry is written.
+
+An image in an entry must show something: `cairns check` fails on one whose
+relative path names no file in the repository, and `cairns new` warns about
+it while the entry is being written. The fix is the file, not the entry.
+Links are not held to this - a link in an entry stays as written.
 
 ## The slug
 

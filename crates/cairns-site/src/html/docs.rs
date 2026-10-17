@@ -311,7 +311,7 @@ pub(crate) fn doc_cards(log: &Log, pages: &[&DocPage], rel: &str) -> String {
 }
 
 pub(crate) fn doc_dir(doc: &DocPage) -> &str {
-    doc.path.rsplit_once('/').map_or("", |(dir, _)| dir)
+    cairns_core::dir_of(&doc.path)
 }
 
 pub(crate) fn doc_row(log: &Log, doc: &DocPage, rel: &str) -> String {
@@ -583,7 +583,7 @@ pub fn backlinks(log: &Log) -> Backlinks {
         }
     }
     for entry in &log.entries {
-        let dir = entry.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let dir = cairns_core::dir_of(&entry.path);
         for url in link_targets(&entry.body) {
             if let Some(target) = page_at(dir, &url) {
                 let from = &mut found.entry(target).or_default().1;

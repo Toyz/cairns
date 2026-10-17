@@ -47,10 +47,10 @@ pub fn show(root: &Path, rev: &str, path: &str) -> Result<String, String> {
     let id = repo
         .rev_parse_single(format!("{rev}:{full}").as_str())
         .map_err(|_| format!("not in the repository at {rev}"))?;
-    let object = id
+    let mut object = id
         .object()
         .map_err(|_| format!("not in the repository at {rev}"))?;
-    String::from_utf8(object.data.clone()).map_err(|_| "not text".to_string())
+    String::from_utf8(std::mem::take(&mut object.data)).map_err(|_| "not text".to_string())
 }
 
 /// A path inside the work tree as a prefix: `""`, or `sub/dir/`.
@@ -93,18 +93,17 @@ pub fn last_changed(
     let mut waiting: Vec<&String> = Vec::new();
     for path in paths {
         let full = format!("{prefix}{path}");
-        let committed = head_tree
+        let on_disk = std::fs::read(root.join(path)).ok();
+        let unchanged = head_tree
             .lookup_entry_by_path(&full)
             .ok()
             .flatten()
             .and_then(|entry| entry.object().ok())
-            .map(|object| object.data.clone());
-        let on_disk = std::fs::read(root.join(path)).ok();
-        match committed {
-            Some(committed) if Some(&committed) == on_disk.as_ref() => waiting.push(path),
-            _ => {
-                found.insert(path.clone(), today.clone());
-            }
+            .is_some_and(|committed| Some(&committed.data) == on_disk.as_ref());
+        if unchanged {
+            waiting.push(path);
+        } else {
+            found.insert(path.clone(), today.clone());
         }
     }
     if waiting.is_empty() {

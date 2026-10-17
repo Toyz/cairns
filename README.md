@@ -40,7 +40,7 @@ prose lines identical on both sides, and renders in 95 ms.
 | `cairns start` | start the clock on a piece of work; `new` records how long it took |
 | `cairns new` | start an entry, numbered and dated, index refreshed |
 | `cairns index` | regenerate `WORKLOG.md` from the entries |
-| `cairns check` | numbering sound, front matter complete, filenames honest, index current |
+| `cairns check` | numbering sound, front matter complete, filenames honest, images present, index current |
 | `cairns open` | what the log still does not know, across every entry |
 | `cairns ls` | the entries a query matches: `cairns ls :battle and open and not superseded`, `took gt 2h` |
 | `cairns refs` | where an entry is mentioned - other entries, reference pages, and comments in the code |

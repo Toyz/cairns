@@ -113,7 +113,7 @@ pub fn render(log: &Log) -> Result<Rendered, serde_json::Error> {
             t: format!(
                 "{} {} {} {}",
                 entry.title,
-                entry.summary.clone().unwrap_or_default(),
+                entry.summary.as_deref().unwrap_or(""),
                 entry.areas.join(" "),
                 html::plain(entry)
             )

@@ -108,7 +108,10 @@ pub(crate) fn pages_under<'a>(log: &'a Log, folder: &str) -> Vec<&'a DocPage> {
         .iter()
         .filter(|doc| {
             !doc.is_index
-                && (doc.section == folder || doc.section.starts_with(&format!("{folder}/")))
+                && doc
+                    .section
+                    .strip_prefix(folder)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
         })
         .collect()
 }
@@ -191,7 +194,7 @@ pub fn fresh(log: &Log, docs_dir: &str) -> String {
 /// heading and a table for each folder below it.
 fn listing(log: &Log, readme: &DocPage) -> String {
     let within = readme.slug.as_str();
-    let dir = readme.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let dir = cairns_core::dir_of(&readme.path);
     let mut out = String::new();
 
     let here: Vec<&DocPage> = log
