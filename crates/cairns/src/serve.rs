@@ -1,9 +1,14 @@
 //! `cairns serve` - the site, locally, rebuilt when the entries change.
 //!
 //! A hand-rolled HTTP/1.1 server over `TcpListener`. It serves one person on
-//! one machine looking at their own worklog, so it is single-threaded, closes
-//! every connection, and speaks the smallest subset of HTTP that a browser
-//! will accept. Anything more would be a dependency bought for a preview.
+//! one machine looking at their own worklog, so it closes every connection and
+//! speaks the smallest subset of HTTP that a browser will accept. Anything more
+//! would be a dependency bought for a preview.
+//!
+//! Each connection is answered on a thread of its own, with a read timeout. It
+//! answered them one at a time once, and a browser opens connections it may
+//! never send a request on - Chrome and Firefox both do, to save a round trip
+//! later - so one silent socket left every page waiting behind it, forever.
 //!
 //! Pages served from here reload themselves when an entry changes. The signal
 //! is a counter polled at [`RELOAD_PATH`] rather than an event stream: a
@@ -17,7 +22,11 @@ use cairns_site::Rendered;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+/// How long a connection may sit without sending its request.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Polled by the injected script; its value changes when the site is rebuilt.
 const RELOAD_PATH: &str = "/_cairns/reload";
@@ -32,7 +41,7 @@ pub fn serve(root: &Path, mut config: Config, port: u16, open: bool) -> Result<(
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let address = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
 
-    let mut site = build(root, &config)?;
+    let mut site = Arc::new(build(root, &config)?);
     let mut built_at = newest(root, &config);
     let mut generation: u64 = 0;
 
@@ -51,13 +60,20 @@ pub fn serve(root: &Path, mut config: Config, port: u16, open: bool) -> Result<(
         } else {
             "xdg-open"
         };
-        let _ = std::process::Command::new(opener).arg(&address).status();
+        // Started, not waited for: on Linux `xdg-open` can stay until the
+        // browser it launched exits, and the server would not answer that
+        // browser's first request until it did.
+        let _ = std::process::Command::new(opener)
+            .arg(&address)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
 
     for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(stream) => stream,
-            Err(_) => continue,
+        let Ok(mut stream) = stream else {
+            continue;
         };
 
         // Stat before serving rather than watching: one pass over the entries
@@ -75,7 +91,7 @@ pub fn serve(root: &Path, mut config: Config, port: u16, open: bool) -> Result<(
             }
             match build(root, &config) {
                 Ok(fresh) => {
-                    site = fresh;
+                    site = Arc::new(fresh);
                     built_at = now;
                     generation += 1;
                     println!("rebuilt: {} files", site.files.len());
@@ -84,12 +100,25 @@ pub fn serve(root: &Path, mut config: Config, port: u16, open: bool) -> Result<(
             }
         }
 
-        if let Err(problem) = respond(&mut stream, &site, generation) {
-            // A browser closing a connection early is not worth a line.
-            if problem.kind() != std::io::ErrorKind::BrokenPipe {
+        let site = Arc::clone(&site);
+        std::thread::spawn(move || {
+            let answered = stream
+                .set_read_timeout(Some(READ_TIMEOUT))
+                .and_then(|()| respond(&mut stream, &site, generation));
+            // A browser closing a connection early, or one it opened and
+            // never used, is not worth a line.
+            if let Err(problem) = answered
+                && !matches!(
+                    problem.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                )
+            {
                 eprintln!("cairns: {problem}");
             }
-        }
+        });
     }
     Ok(())
 }

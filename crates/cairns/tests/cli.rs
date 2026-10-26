@@ -559,3 +559,55 @@ fn an_entry_written_over_mcp_is_the_entry_cairns_new_writes() {
     );
     assert!(!mcp.path().join("worklog/0003-x.md").exists());
 }
+
+/// A browser opens connections it may never send a request on. The server
+/// answered one connection at a time, and one such socket left every page
+/// waiting behind it - which on Linux, where browsers do it readily, was
+/// `cairns serve` hanging.
+#[test]
+fn serve_answers_while_a_connection_sits_idle() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let log = Project::new();
+    log.ok(&[
+        "new",
+        "One",
+        "--area",
+        "spec",
+        "--body",
+        "Prose.",
+        "--unknown",
+        "nothing",
+    ]);
+    let mut server = Command::new(env!("CARGO_BIN_EXE_cairns"))
+        .args(["serve", "--port", "0"])
+        .current_dir(log.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    BufReader::new(server.stdout.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    let address = first
+        .split("http://")
+        .nth(1)
+        .expect("the address it serves on")
+        .trim()
+        .to_string();
+
+    let _idle = TcpStream::connect(&address).unwrap();
+    let mut page = TcpStream::connect(&address).unwrap();
+    page.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    page.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        .unwrap();
+    let mut reply = String::new();
+    let answered = page.read_to_string(&mut reply);
+    let _ = server.kill();
+    let _ = server.wait();
+    answered.expect("an answer, not a wait behind the idle connection");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+}
