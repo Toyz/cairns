@@ -10,24 +10,24 @@
 class Cairns < Formula
   desc "Worklog kept as numbered markdown entries: write them, check them, publish them"
   homepage "https://github.com/Toyz/cairns"
-  version "0.10.2"
+  version "0.11.0"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/Toyz/cairns/releases/download/v#{version}/cairns-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "f34230d922e47f34295f3a83873004889a34c90b0789d1f14b91a2ed9aa6a871"
+      sha256 "541a804f960ba0f7fd84637280eb7a43fd3fb7be94062e58f6e18b330d110bca"
     end
     on_intel do
       url "https://github.com/Toyz/cairns/releases/download/v#{version}/cairns-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "a79a0f5d438ae44fc56d0f804d72c1811e012f18285a2bcccee01077c12d76fd"
+      sha256 "7473a1a172d4ef3f2fd5c3c2c8eb194448d901d8ad504dfbe6b45f7d3c8418a7"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/Toyz/cairns/releases/download/v#{version}/cairns-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "c58a1c81a90b580b818fae766a37f22dfd778dbdc5c329e054fcc70d6907c2d7"
+      sha256 "9aa997f678377103ae6d6d901235314e92f55c01e494010469fd910e7f35d6ce"
     end
   end
 
